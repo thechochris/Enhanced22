@@ -14,6 +14,7 @@
     marks: {}, // playId -> { s, e } | { skip: true }
     history: [], // playIds in the order they were marked (for undo)
     prefs: { overlay: true, list: true, autoSkip: false, broadcastAudio: true },
+    audioOffset: 0, // seconds; nudged with [ and ]
     anchors: [], // broadcast audio sync points: { w: snap wall-clock ms, b: broadcast video seconds }
     isAudioTab: false,
     lastDrive: null, // latest message from the All-22 tab (audio tab only)
@@ -65,6 +66,7 @@
     state.marks = saved.marks || {};
     state.history = saved.history || [];
     state.anchors = saved.anchors || [];
+    state.audioOffset = saved.audioOffset || 0;
     renderList();
     renderAutoButton();
     render();
@@ -72,7 +74,7 @@
 
   function saveMarks() {
     storeSet({
-      [marksKey()]: { marks: state.marks, history: state.history, anchors: state.anchors },
+      [marksKey()]: { marks: state.marks, history: state.history, anchors: state.anchors, audioOffset: state.audioOffset },
     });
   }
 
@@ -89,6 +91,7 @@
       state.marks = v.marks || {};
       state.history = v.history || [];
       state.anchors = v.anchors || [];
+      state.audioOffset = v.audioOffset || 0;
       renderList();
       render();
     }
@@ -230,14 +233,17 @@
     lastDriveSent = now;
     const p = i >= 0 ? state.plays[i] : null;
     const seg = i >= 0 ? segment(i) : null;
-    // During the end zone view (when it isn't skipped) the broadcast audio of that play repeats.
-    const since = seg && seg.end != null && t >= seg.end ? t - seg.end : t - (seg ? seg.s : 0);
+    const m = i >= 0 ? markOf(i) : null;
+    // Hand-placed plays start at the snap; auto-synced ones carry an estimated snap.
+    const snapT = m && typeof m.snap === 'number' ? m.snap : seg ? seg.s : 0;
+    const inEndZone = !!(seg && seg.end != null && t >= seg.end);
+    const since = t - snapT;
     send({
       type: 'audioDrive',
       gameId: state.game.gameId,
       playIndex: i,
-      w: p && p.snapAt ? p.snapAt + since * 1000 : null,
-      playing: !!p && !state.video.paused,
+      w: p && p.snapAt ? p.snapAt + since * 1000 + state.audioOffset * 1000 : null,
+      playing: !!p && !state.video.paused && !inEndZone, // the end zone replay stays quiet
       rate: state.video.playbackRate,
     });
   }
@@ -836,6 +842,14 @@
     },
   };
   const AUDIO_KEYS = { KeyB: addAnchor, KeyU: removeLastAnchor };
+  // [ and ] nudge the broadcast audio earlier or later, in either tab.
+  function nudgeAudio(delta) {
+    state.audioOffset = Math.round((state.audioOffset + delta) * 100) / 100;
+    saveMarks();
+    toast(`Broadcast audio offset: ${state.audioOffset > 0 ? '+' : ''}${state.audioOffset.toFixed(2)} s`);
+  }
+  KEYS.BracketLeft = AUDIO_KEYS.BracketLeft = () => nudgeAudio(-0.25);
+  KEYS.BracketRight = AUDIO_KEYS.BracketRight = () => nudgeAudio(0.25);
   function handleKey(code) {
     if (!state.video || !state.game) return false;
     const fn = (state.isAudioTab ? AUDIO_KEYS : KEYS)[code];

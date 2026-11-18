@@ -240,6 +240,8 @@ var E22Auto = (function () {
   // ---------- matching clips to plays ----------
   const PRE_SNAP = /False Start|Delay of Game|Encroachment|Neutral Zone Infraction|Illegal Substitution|Too Many Men|Illegal Shift|Defensive Offside|Offside on Free Kick/i;
 
+  const SNAP_TAIL = 1.5; // seconds between the whistle and the cut to the end zone view
+
   function playDuration(p) {
     return p.snapAt && p.endAt && p.endAt > p.snapAt ? (p.endAt - p.snapAt) / 1000 : null;
   }
@@ -307,7 +309,12 @@ var E22Auto = (function () {
     plays.forEach((p, j) => {
       if (partial && j > lastPlay) return;
       const c = matches.has(j) ? clips[matches.get(j)] : null;
-      marks[p.id] = c ? { s: c.s, e: c.e, auto: true } : { skip: true, auto: true };
+      if (!c) { marks[p.id] = { skip: true, auto: true }; return; }
+      // The clip starts before the snap. Estimate the snap from the clip's end (the cut to the
+      // end zone view comes shortly after the whistle) minus the play's real length.
+      const d = playDuration(p);
+      const snap = d != null ? Math.max(c.s, c.e - d - SNAP_TAIL) : c.s;
+      marks[p.id] = { s: c.s, e: c.e, snap, auto: true };
     });
     const alternating = shots.slice(1).filter((x, k) => x.label !== shots[k].label).length / Math.max(1, shots.length - 1);
     return {
