@@ -262,6 +262,8 @@
   }
 
   let lastFollowSeek = 0;
+  let lastFollowTime = -1;
+  let lastFollowMove = 0;
   let followStatus = 'waiting for the All-22 tab';
   function followAudio(msg) {
     state.lastDrive = msg;
@@ -272,8 +274,28 @@
     if (document.visibilityState === 'visible' && document.hasFocus()) return;
     const b = broadcastTimeFor(msg.w);
     if (b == null) { followStatus = state.anchors.length ? 'waiting for a synced play' : 'no anchor yet: press B at a snap'; if (!v.paused) v.pause(); return; }
-    if (!msg.playing) { followStatus = `paused (${msg.reason || 'All-22 not playing'})`; if (!v.paused) v.pause(); return; }
-    followStatus = `following · drift ${(v.currentTime - b).toFixed(1)} s`;
+    if (!msg.playing) {
+      followStatus = `paused (${msg.reason || 'All-22 not playing'})`;
+      lastFollowMove = performance.now(); // don't count a deliberate pause as a stall
+      if (!v.paused) v.pause();
+      return;
+    }
+    // Stall watchdog: if the broadcast should be playing but its clock hasn't moved for 1.5 s
+    // (common in a background tab, where Chrome slows the player's loading), kick it with a
+    // fresh seek and play.
+    const nowMs = performance.now();
+    if (Math.abs(v.currentTime - lastFollowTime) > 0.05) { lastFollowTime = v.currentTime; lastFollowMove = nowMs; }
+    const stalled = nowMs - lastFollowMove > 1500;
+    followStatus = `${stalled ? 'stalled, retrying' : 'following'} · drift ${(v.currentTime - b).toFixed(1)} s` +
+      (v.readyState < 3 ? ` · loading (state ${v.readyState})` : '') + (document.hidden ? ' · background tab' : '');
+    if (stalled && nowMs - lastFollowSeek > 3000) {
+      lastFollowSeek = nowMs;
+      lastFollowMove = nowMs;
+      v.playbackRate = msg.rate;
+      v.currentTime = b + 0.5;
+      v.play().catch(() => {});
+      return;
+    }
     v.muted = false;
     if (v.paused) v.play().catch(() => {});
     // Streams can't land exactly where you seek and take a moment to buffer, so constant small
