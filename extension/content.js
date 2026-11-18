@@ -226,6 +226,7 @@
   // snap has a wall-clock time in the play-by-play data, so "seconds since the snap" maps
   // to a wall-clock moment, and anchors map wall-clock moments onto the broadcast replay.
   let lastDriveSent = 0;
+  let lastDriveKey = '';
   // Wall-clock moment for All-22 time t inside play i (null if unknown).
   function wallFor(i, t) {
     const p = i >= 0 ? state.plays[i] : null;
@@ -271,15 +272,18 @@
   function driveAudio(i, t) {
     if (state.isAudioTab || !state.prefs.broadcastAudio) return;
     gateAudio(i);
-    const now = performance.now();
-    if (now - lastDriveSent < 250) return;
-    lastDriveSent = now;
     const v = state.video;
     // The broadcast simply keeps running from this play's snap (through the end zone view,
     // commentary included) until the next play starts, then jumps there.
     const w = wallFor(i, t);
     const holding = hold.index != null;
     const playing = !!w && !holding && !v.paused && !v.seeking && v.readyState >= 2;
+    // Send at least 4 times a second, and right away when play starts, stops or changes.
+    const key = `${i}|${playing}`;
+    const now = performance.now();
+    if (key === lastDriveKey && now - lastDriveSent < 250) return;
+    lastDriveKey = key;
+    lastDriveSent = now;
     send({
       type: 'audioDrive',
       gameId: state.game.gameId,
@@ -290,6 +294,7 @@
         : holding ? 'loading this play' : v.paused ? 'All-22 paused'
         : v.seeking || v.readyState < 2 ? 'All-22 buffering' : 'playing',
       rate: v.playbackRate,
+      sentAt: Date.now(), // lets the broadcast tab allow for the time the message took
     });
   }
 
@@ -297,7 +302,8 @@
     if (!state.anchors.length || w == null) return null;
     const sorted = [...state.anchors].sort((a, b) => a.w - b.w);
     let a = sorted[0];
-    for (const x of sorted) if (x.w <= w) a = x;
+    // A correction point belongs to its play, including the moments just before the snap.
+    for (const x of sorted) if (x.w <= w + 1500) a = x;
     return a.b + (w - a.w) / 1000;
   }
 
@@ -312,6 +318,8 @@
   let lastFollowTime = -1;
   let lastFollowMove = 0;
   let followStatus = 'waiting for the All-22 tab';
+  let seekLead = 0.15; // seconds; adjusted after every seek
+  let seekCheck = false;
   function followAudio(msg) {
     state.lastDrive = msg;
     renderAudioBadge();
@@ -319,7 +327,9 @@
     if (!v || !state.game || msg.gameId !== state.game.gameId || !state.prefs.broadcastAudio) return;
     // While you're looking at and using this tab, hands off, so you can scrub and anchor.
     if (document.visibilityState === 'visible' && document.hasFocus()) return;
-    const b = broadcastTimeFor(msg.w);
+    // Where the All-22 is *now*: the message is a few milliseconds old by the time it lands.
+    const age = msg.playing && msg.sentAt ? Math.min(1000, Math.max(0, Date.now() - msg.sentAt)) : 0;
+    const b = broadcastTimeFor(msg.w == null ? null : msg.w + age * (msg.rate || 1));
     if (b == null) { followStatus = state.anchors.length ? 'waiting for a synced play' : 'no anchor yet: press B at a snap'; if (!v.paused) v.pause(); return; }
     if (!msg.playing) {
       // Not playing: park the broadcast at the target spot so it buffers there in advance.
@@ -347,7 +357,8 @@
       lastFollowSeek = nowMs;
       lastFollowMove = nowMs;
       v.playbackRate = msg.rate;
-      v.currentTime = b + 0.5;
+      v.currentTime = b + seekLead;
+      seekCheck = true;
       v.play().catch(() => {});
       return;
     }
@@ -361,15 +372,25 @@
     if (v.seeking) return;
     const now = performance.now();
     const drift = v.currentTime - b; // > 0: broadcast is ahead
+    // Learn how far ahead to aim a seek: after each one, see where we actually landed once
+    // playing again and correct the lead for next time (instead of a fixed guess).
+    if (seekCheck && !v.paused && v.readyState >= 3 && Math.abs(drift) < 3) {
+      seekCheck = false;
+      seekLead = Math.min(1.5, Math.max(0, seekLead - drift * 0.6));
+    }
     if (Math.abs(drift) > 3 && now - lastFollowSeek > 2000) {
-      console.info('[Enhanced22] broadcast audio seek', v.currentTime, '->', b);
+      console.info('[Enhanced22] broadcast audio seek', v.currentTime, '->', b, 'lead', seekLead.toFixed(2));
       lastFollowSeek = now;
       v.playbackRate = msg.rate;
-      v.currentTime = b + 0.3; // seeking takes a moment; aim slightly ahead
+      v.currentTime = b + seekLead; // seeking takes a moment; aim that far ahead
+      seekCheck = true;
       return;
     }
-    const want = Math.abs(drift) > 0.25 ? msg.rate * (drift > 0 ? 0.9 : 1.1) : msg.rate;
-    if (Math.abs(v.playbackRate - want) > 0.001) v.playbackRate = want;
+    // Close small gaps smoothly: the speed change is proportional to the gap (at most 8%), and
+    // anything under 40 ms is left alone.
+    const k = Math.abs(drift) < 0.04 ? 0 : Math.max(-0.08, Math.min(0.08, drift * 0.4));
+    const want = msg.rate * (1 - k);
+    if (Math.abs(v.playbackRate - want) > 0.005) v.playbackRate = want;
   }
 
   function addAnchor() {
@@ -959,14 +980,27 @@
     },
   };
   const AUDIO_KEYS = { KeyB: addAnchor, KeyU: removeLastAnchor };
-  // [ and ] nudge the broadcast audio earlier or later, in either tab.
+  // [ and ] (either tab) move the broadcast audio later or earlier from the current play on.
+  // The full-game replay leaves out commercial breaks, so the right offset can change after
+  // each break; nudging adds a correction point at this play and leaves earlier plays alone.
   function nudgeAudio(delta) {
-    state.audioOffset = Math.round((state.audioOffset + delta) * 100) / 100;
+    const i = state.isAudioTab ? state.lastDrive?.playIndex ?? -1 : currentIndex(state.video.currentTime);
+    const p = i >= 0 ? state.plays[i] : null;
+    const b = p && p.snapAt ? broadcastTimeFor(p.snapAt) : null;
+    if (b == null) {
+      state.audioOffset = Math.round((state.audioOffset + delta) * 100) / 100;
+      saveMarks();
+      toast(`Broadcast audio offset: ${state.audioOffset > 0 ? '+' : ''}${state.audioOffset.toFixed(2)} s`);
+      return;
+    }
+    const here = state.anchors.find((a) => Math.abs(a.w - p.snapAt) <= 1000);
+    if (here) here.b = Math.round((here.b + delta) * 1000) / 1000;
+    else state.anchors.push({ w: p.snapAt, b: Math.round((b + delta) * 1000) / 1000 });
     saveMarks();
-    toast(`Broadcast audio offset: ${state.audioOffset > 0 ? '+' : ''}${state.audioOffset.toFixed(2)} s`);
+    toast(`Audio ${Math.abs(delta).toFixed(1)} s ${delta < 0 ? 'later' : 'earlier'} from ${E22.quarter(p.qtr)} ${E22.clock(p.time)} on`);
   }
-  KEYS.BracketLeft = AUDIO_KEYS.BracketLeft = () => nudgeAudio(-0.25);
-  KEYS.BracketRight = AUDIO_KEYS.BracketRight = () => nudgeAudio(0.25);
+  KEYS.BracketLeft = AUDIO_KEYS.BracketLeft = () => nudgeAudio(-0.1);
+  KEYS.BracketRight = AUDIO_KEYS.BracketRight = () => nudgeAudio(0.1);
   function handleKey(code) {
     if (!state.video || !state.game) return false;
     const fn = (state.isAudioTab ? AUDIO_KEYS : KEYS)[code];
