@@ -21,16 +21,44 @@
     internalSeek: false,
   };
 
+  // ---------- extension lifetime ----------
+  // When the extension is reloaded or updated, this copy of the script is orphaned and every
+  // chrome.* call throws "Extension context invalidated". Detect that and shut down quietly.
+  let dead = false;
+  const timers = [];
+  const alive = () => { try { return !dead && !!chrome.runtime?.id; } catch { return false; } };
+  function shutdown() {
+    if (dead) return;
+    dead = true;
+    timers.forEach(clearInterval);
+    window.removeEventListener('keydown', onKeyDown, true);
+    document.removeEventListener('fullscreenchange', placeHost);
+    host?.remove();
+    window.__enhanced22 = false; // a fresh copy (after a page refresh) may take over
+  }
+  function send(msg) {
+    if (!alive()) { shutdown(); return Promise.resolve(null); }
+    try { return chrome.runtime.sendMessage(msg).catch(() => null); } catch { shutdown(); return Promise.resolve(null); }
+  }
+  function storeSet(obj) {
+    if (!alive()) { shutdown(); return Promise.resolve(); }
+    try { return chrome.storage.local.set(obj).catch(() => {}); } catch { shutdown(); return Promise.resolve(); }
+  }
+  async function storeGet(keys) {
+    if (!alive()) { shutdown(); return {}; }
+    try { return await chrome.storage.local.get(keys); } catch { shutdown(); return {}; }
+  }
+
   // ---------- storage ----------
   const marksKey = () => `marks:${state.game.gameId}`;
 
   async function loadActiveGame() {
-    const { activeGame, prefs } = await chrome.storage.local.get(['activeGame', 'prefs']);
+    const { activeGame, prefs } = await storeGet(['activeGame', 'prefs']);
     if (prefs) state.prefs = { ...state.prefs, ...prefs };
     if (!activeGame) { state.game = null; state.plays = []; renderList(); render(); return; }
     const pk = `plays:${activeGame.gameId}`;
     const mk = `marks:${activeGame.gameId}`;
-    const data = await chrome.storage.local.get([pk, mk]);
+    const data = await storeGet([pk, mk]);
     state.game = activeGame;
     state.plays = data[pk] || [];
     const saved = data[mk] || {};
@@ -42,13 +70,13 @@
   }
 
   function saveMarks() {
-    chrome.storage.local.set({
+    storeSet({
       [marksKey()]: { marks: state.marks, history: state.history, anchors: state.anchors },
     });
   }
 
   function savePrefs() {
-    chrome.storage.local.set({ prefs: state.prefs });
+    storeSet({ prefs: state.prefs });
   }
 
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -195,14 +223,14 @@
     const seg = i >= 0 ? segment(i) : null;
     // During the end zone view (when it isn't skipped) the broadcast audio of that play repeats.
     const since = seg && seg.end != null && t >= seg.end ? t - seg.end : t - (seg ? seg.s : 0);
-    chrome.runtime.sendMessage({
+    send({
       type: 'audioDrive',
       gameId: state.game.gameId,
       playIndex: i,
       w: p && p.snapAt ? p.snapAt + since * 1000 : null,
       playing: !!p && !state.video.paused,
       rate: state.video.playbackRate,
-    }).catch(() => {});
+    });
   }
 
   function broadcastTimeFor(w) {
@@ -558,7 +586,7 @@
 
     const season = pickerSeason;
     let r;
-    try { r = await chrome.runtime.sendMessage({ type: 'getGames', season }); } catch (e) { r = { ok: false, error: String(e) }; }
+    r = await send({ type: 'getGames', season });
     if (season !== pickerSeason || !box.isConnected) return;
     if (!r?.ok) { status.textContent = `Couldn't load games: ${r?.error || 'unknown error'}`; return; }
     status.remove();
@@ -572,7 +600,7 @@
       d.append(n, dt);
       d.addEventListener('click', () => {
         state.picking = false;
-        chrome.storage.local.set({ activeGame: g });
+        storeSet({ activeGame: g });
       });
       return d;
     };
@@ -699,7 +727,7 @@
     fn();
     return true;
   }
-  window.addEventListener('keydown', (ev) => {
+  function onKeyDown(ev) {
     if (ev.ctrlKey || ev.altKey || ev.metaKey || ev.shiftKey || ev.repeat) return;
     const tgt = ev.composedPath()[0];
     if (tgt && (tgt.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(tgt.tagName || ''))) return;
@@ -710,9 +738,10 @@
       handleKey(ev.code);
     } else if (!state.video) {
       // The video lives in another frame of this page (or the player has focus there); pass it on.
-      chrome.runtime.sendMessage({ type: 'relayKey', code: ev.code }).catch(() => {});
+      send({ type: 'relayKey', code: ev.code });
     }
-  }, true);
+  }
+  window.addEventListener('keydown', onKeyDown, true);
 
   // ---------- find the replay video ----------
   // Players often keep several <video> elements (ads, previews, the real stream).
@@ -743,7 +772,7 @@
 
   async function checkRole() {
     try {
-      const r = await chrome.runtime.sendMessage({ type: 'whoami' });
+      const r = await send({ type: 'whoami' });
       const was = state.isAudioTab;
       state.isAudioTab = !!r?.isAudioTab;
       if (was !== state.isAudioTab) render();
@@ -756,11 +785,39 @@
     if (msg?.type === 'key' && state.video) handleKey(msg.code);
   });
 
-  setInterval(() => {
+  // ---------- pick the game from the page address ----------
+  // NFL+ game pages look like /games/49ers-at-cowboys-2026-reg-10.
+  let lastAutoUrl = null;
+  async function autoPickFromUrl() {
+    let href = location.href;
+    try { href = window.top.location.href; } catch { /* cross-origin frame */ }
+    if (href === lastAutoUrl) return;
+    lastAutoUrl = href;
+    const m = /\/games\/([a-z0-9-]+?)-at-([a-z0-9-]+?)-(\d{4})-(reg|post)-(\d+)/i.exec(href);
+    if (!m) return;
+    const abbr = (nick) => Object.keys(NICK).find((k) => NICK[k] === nick.split('-').pop());
+    const away = abbr(m[1].toLowerCase());
+    const home = abbr(m[2].toLowerCase());
+    const season = Number(m[3]);
+    const week = Number(m[5]);
+    if (!away || !home) return;
+    if (state.game && state.game.home === home && state.game.away === away &&
+        state.game.gameId.startsWith(String(season))) return;
+    const r = await send({ type: 'getGames', season });
+    const g = r?.ok && r.games.find((x) => x.home === home && x.away === away &&
+      (m[4].toLowerCase() === 'post' || x.week === week));
+    if (g) { state.picking = false; await storeSet({ activeGame: g }); toast(`Loaded ${g.away} at ${g.home}, Week ${g.week}`); }
+  }
+
+  timers.push(setInterval(() => {
+    if (!alive()) return shutdown();
     const v = findVideo();
-    if (v) attach(v);
+    if (v) { attach(v); autoPickFromUrl(); }
     else if (host && state.video && !state.video.isConnected) { host.remove(); state.video = null; }
-  }, 1000);
-  setInterval(() => { placeHost(); tick(); }, 100);
+  }, 1000));
+  timers.push(setInterval(() => {
+    if (!alive()) return shutdown();
+    placeHost(); tick();
+  }, 100));
   document.addEventListener('fullscreenchange', placeHost);
 })();

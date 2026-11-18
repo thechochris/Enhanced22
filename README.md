@@ -14,12 +14,12 @@ The extension only reads the player's position and seeks it, like you would with
 1. Download or clone this repository.
 2. Open `chrome://extensions` (or `edge://extensions`) and turn on **Developer mode**.
 3. Click **Load unpacked** and pick the `extension` folder.
-4. Pin the Enhanced22 button to the toolbar.
+4. After updating the extension, refresh any open NFL+ tabs.
 
 ## Watching a game
 
 1. Open the game's All-22 replay on NFL+. The Enhanced22 panel appears on the video.
-2. Pick the game in the panel (it suggests the one matching the page when it can). The first time, it downloads that season's play-by-play (about 10 MB). Use **Change game** to switch later.
+2. The game is picked automatically from the NFL+ page address. If it can't tell, pick it in the panel. The first time, it downloads that season's play-by-play (about 10 MB). Use **Change game** to switch later.
 3. **Sync once per game.** The All-22 replay has no markers, so the first time through, press **S** at the snap of each play's sideline view. The box at the bottom tells you which play is next. Press **X** if that play isn't in the replay, **Z** to undo. Watching at 2x is fine. Your sync is saved, so you only do this once per game.
 4. After that, the overlay follows along, the end zone view is skipped, and every play in the list is clickable.
 
