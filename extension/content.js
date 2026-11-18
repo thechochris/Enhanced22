@@ -13,7 +13,7 @@
     plays: [],
     marks: {}, // playId -> { s, e } | { skip: true }
     history: [], // playIds in the order they were marked (for undo)
-    prefs: { overlay: true, list: true, sidelineOnly: true, broadcastAudio: true },
+    prefs: { overlay: true, list: true, autoSkip: false, broadcastAudio: true },
     anchors: [], // broadcast audio sync points: { w: snap wall-clock ms, b: broadcast video seconds }
     isAudioTab: false,
     lastDrive: null, // latest message from the All-22 tab (audio tab only)
@@ -199,14 +199,14 @@
     if (!state.game) { renderStatus(v.currentTime, v); return; }
     const t = v.currentTime;
     const i = currentIndex(t);
-    if (state.prefs.sidelineOnly && !v.paused && i >= 0 && state.suppressSkipFor !== i &&
+    if (state.prefs.autoSkip && !v.paused && i >= 0 && state.suppressSkipFor !== i &&
         performance.now() > skipCooldownUntil) {
       const seg = segment(i);
       // Only skip a real end zone view: the clip must be long enough to hold two angles, and we
       // must be well short of the next play (streams often land a second or two early on a seek).
       if (seg && seg.end != null && seg.next != null && seg.next - seg.s >= 6 &&
           t >= seg.end && seg.next - t > 1.5) {
-        autoSkip(seg.next);
+        autoSkip(seg, t);
       }
     }
     if (!state.isAudioTab) { renderBug(i); renderStatus(t, v); }
@@ -290,13 +290,14 @@
 
   let skipCooldownUntil = 0;
   let recentSkips = [];
-  function autoSkip(target) {
+  function autoSkip(seg, t) {
+    const target = seg.next;
     const now = performance.now();
     recentSkips = recentSkips.filter((x) => now - x < 15000);
     recentSkips.push(now);
     if (recentSkips.length > 3) {
       // Something is off (bad sync marks, or the player fighting our seeks). Stop rather than loop.
-      state.prefs.sidelineOnly = false;
+      state.prefs.autoSkip = false;
       savePrefs();
       render();
       toast('Auto-skip turned off: it was skipping too often. Check the synced plays, then turn it back on with V.');
@@ -305,7 +306,7 @@
     }
     skipCooldownUntil = now + 2000;
     seek(target);
-    toast('Skipped end zone view · V turns auto-skip off');
+    toast(`Skipped at ${fmtTime(t)} (play synced at ${fmtTime(seg.s)}, next at ${fmtTime(seg.next)}) · V turns it off`);
   }
 
   function onSeeked() {
@@ -402,7 +403,7 @@
           <header><div class="titlebar"><span class="grip" title="Drag to move">⠿</span><div class="title">Enhanced22</div>
               <button class="change" title="Choose a different game">Change game</button></div><div class="sub"></div>
             <div class="toggles">
-              <label><input type="checkbox" data-pref="sidelineOnly"> Auto-skip end zone view</label>
+              <label><input type="checkbox" data-pref="autoSkip"> Auto-skip end zone view</label>
               <label><input type="checkbox" data-pref="overlay"> Overlay</label>
               <label><input type="checkbox" data-pref="broadcastAudio"> Broadcast audio</label>
             </div>
@@ -721,8 +722,20 @@
       const h = Math.floor(x / 3600), m = Math.floor((x % 3600) / 60), sec = Math.floor(x % 60);
       return `${h ? `${h}:` : ''}${String(m).padStart(h ? 2 : 1, '0')}:${String(sec).padStart(2, '0')}`;
     };
-    const txt = `Video ${fmt(t)} / ${fmt(v.duration)} · ${v.paused ? 'paused' : 'playing'}`;
+    let txt = `Video ${fmt(t)} / ${fmt(v.duration)} · ${v.paused ? 'paused' : 'playing'}`;
+    const i = state.game ? currentIndex(t) : -1;
+    const seg = i >= 0 ? segment(i) : null;
+    if (seg) {
+      txt += ` · this play from ${fmt(seg.s)}` +
+        (seg.end != null ? `, end zone view ≈ ${fmt(seg.end)}, next play ${fmt(seg.next)}` : '');
+    }
     if (txt !== lastStatus) { lastStatus = txt; el.status.textContent = txt; }
+  }
+
+  function fmtTime(x) {
+    if (!Number.isFinite(x)) return '--:--';
+    const h = Math.floor(x / 3600), m = Math.floor((x % 3600) / 60), sec = Math.floor(x % 60);
+    return `${h ? `${h}:` : ''}${String(m).padStart(h ? 2 : 1, '0')}:${String(sec).padStart(2, '0')}`;
   }
 
   function render() {
@@ -751,8 +764,8 @@
     KeyO: () => { state.prefs.overlay = !state.prefs.overlay; savePrefs(); render(); },
     KeyL: () => { state.prefs.list = !state.prefs.list; savePrefs(); render(); },
     KeyV: () => {
-      state.prefs.sidelineOnly = !state.prefs.sidelineOnly; savePrefs(); render();
-      toast(state.prefs.sidelineOnly ? 'Sideline view only' : 'Showing both camera angles');
+      state.prefs.autoSkip = !state.prefs.autoSkip; savePrefs(); render();
+      toast(state.prefs.autoSkip ? 'Auto-skip end zone view: on' : 'Auto-skip end zone view: off');
     },
   };
   const AUDIO_KEYS = { KeyB: addAnchor, KeyU: removeLastAnchor };

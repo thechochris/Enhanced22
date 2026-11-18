@@ -4,7 +4,7 @@ A Chrome/Edge extension that makes NFL+ All-22 replays easier to watch:
 
 - **Game overlay** on the video: quarter and clock, down and distance, field position, who has the ball, score, and play type.
 - **Play list** beside the video. Click any play to jump to it, or press **N** / **P** for next / previous.
-- **Sideline view only.** The All-22 replay shows each play twice (sideline, then end zone). The end zone view is skipped automatically.
+- **Sideline view only.** The All-22 replay shows each play twice (sideline, then end zone). Turn on **Auto-skip end zone view** (or press V) to skip it automatically. It is off by default.
 - **Broadcast audio** (in progress): plays the TV broadcast's audio, from a second tab, in sync with the All-22 film.
 
 The extension only reads the player's position and seeks it, like you would with the mouse. It never downloads, records or decodes the video, so NFL+ playback and DRM are untouched. Game data comes from the free public [nflverse](https://github.com/nflverse/nflverse-data) play-by-play, which updates the morning after games.
@@ -21,7 +21,7 @@ The extension only reads the player's position and seeks it, like you would with
 1. Open the game's All-22 replay on NFL+. The Enhanced22 panel appears on the video.
 2. The game is picked automatically from the NFL+ page address. If it can't tell, pick it in the panel. The first time, it downloads that season's play-by-play (about 10 MB). Use **Change game** to switch later.
 3. **Sync once per game.** The All-22 replay has no markers, so the first time through, press **S** at the snap of each play's sideline view. The box at the bottom tells you which play is next. Press **X** if that play isn't in the replay, **Z** to undo. Watching at 2x is fine. Your sync is saved, so you only do this once per game.
-4. After that, the overlay follows along, the end zone view is skipped, and every play in the list is clickable.
+4. After that, the overlay follows along and every play in the list is clickable.
 
 The end of the sideline view is estimated as the midpoint between two snaps, since both angles show the same play. If one is off, press **E** at the moment the sideline view ends. Shift-click a play in the list to move its start to the current time.
 
@@ -46,7 +46,7 @@ If the broadcast replay has cuts (commercial breaks removed), add another **B** 
 | Z | undo last sync | | | |
 | E | mark end of sideline view | | | |
 | N / P | next / previous play | | | |
-| V | toggle sideline view only | | | |
+| V | toggle auto-skip of the end zone view (off by default) | | | |
 | O / L | toggle overlay / play list | | | |
 
 ## Known limits
