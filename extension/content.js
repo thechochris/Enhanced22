@@ -226,30 +226,82 @@
   // snap has a wall-clock time in the play-by-play data, so "seconds since the snap" maps
   // to a wall-clock moment, and anchors map wall-clock moments onto the broadcast replay.
   let lastDriveSent = 0;
+  // Wall-clock moment for All-22 time t inside play i (null if unknown).
+  function wallFor(i, t) {
+    const p = i >= 0 ? state.plays[i] : null;
+    if (!p || !p.snapAt) return null;
+    const m = markOf(i);
+    const seg = segment(i);
+    // Hand-placed plays start at the snap; auto-synced ones carry an estimated snap.
+    const snapT = m && typeof m.snap === 'number' ? m.snap : seg ? seg.s : t;
+    return p.snapAt + (t - snapT) * 1000 + state.audioOffset * 1000;
+  }
+
+  function nextSyncedIndex(i) {
+    for (let j = i + 1; j < state.plays.length; j++) if (hasStart(j)) return j;
+    return -1;
+  }
+
+  // Broadcast readiness, reported back by the broadcast tab.
+  const audioLink = { ready: false, at: 0, readyAt: 0 };
+  const audioConnected = () => performance.now() - audioLink.at < 2500;
+
+  // Hold the All-22 video at the start of a play until the broadcast has loaded that spot.
+  const hold = { index: null, since: 0, ours: false };
+  let lastStartedIndex = null;
+  const HOLD_TIMEOUT = 8000;
+  function gateAudio(i) {
+    const v = state.video;
+    if (!state.prefs.broadcastAudio || !audioConnected() || i < 0) { hold.index = null; lastStartedIndex = i; return; }
+    const now = performance.now();
+    if (hold.index != null) {
+      const ready = audioLink.ready && audioLink.readyAt > hold.since + 300;
+      if (ready || now - hold.since > HOLD_TIMEOUT || i !== hold.index) {
+        if (!ready && i === hold.index) toast('Broadcast audio is slow to load; playing without waiting');
+        const resume = hold.ours;
+        hold.index = null;
+        lastStartedIndex = i;
+        if (resume && v.paused) v.play().catch(() => {});
+      }
+      return;
+    }
+    if (!v.paused && i !== lastStartedIndex) {
+      if (audioLink.ready && audioLink.readyAt > now - 400) { lastStartedIndex = i; return; } // already loaded
+      hold.index = i; hold.since = now; hold.ours = true;
+      v.pause();
+      toast('Loading broadcast audio for this play…');
+    }
+  }
+
   function driveAudio(i, t) {
     if (state.isAudioTab || !state.prefs.broadcastAudio) return;
+    gateAudio(i);
     const now = performance.now();
     if (now - lastDriveSent < 250) return;
     lastDriveSent = now;
-    const p = i >= 0 ? state.plays[i] : null;
+    const v = state.video;
     const seg = i >= 0 ? segment(i) : null;
-    const m = i >= 0 ? markOf(i) : null;
-    // Hand-placed plays start at the snap; auto-synced ones carry an estimated snap.
     const inEndZone = !!(seg && seg.end != null && t >= seg.end);
-    // In the end zone replay the play's call plays again, lined up on that view's own snap.
-    const snapT = inEndZone ? seg.end + 1.5
-      : m && typeof m.snap === 'number' ? m.snap : seg ? seg.s : 0;
-    const since = t - snapT;
+    // During the end zone replay, preload the broadcast at the start of the next play instead
+    // of playing, so the next play's audio is ready the moment it starts.
+    let w = wallFor(i, t);
+    let prepareOnly = false;
+    if (inEndZone) {
+      const j = nextSyncedIndex(i);
+      if (j >= 0) { w = wallFor(j, markOf(j).s); prepareOnly = true; }
+    }
+    const holding = hold.index != null;
+    const playing = !!w && !prepareOnly && !holding && !v.paused && !v.seeking && v.readyState >= 2;
     send({
       type: 'audioDrive',
       gameId: state.game.gameId,
       playIndex: i,
-      w: p && p.snapAt ? p.snapAt + since * 1000 + state.audioOffset * 1000 : null,
-      // Quiet while the All-22 video is paused, seeking or out of data.
-      playing: !!p && !state.video.paused && !state.video.seeking && state.video.readyState >= 2,
-      reason: !p ? 'no synced play here' : state.video.paused ? 'All-22 paused'
-        : state.video.seeking || state.video.readyState < 2 ? 'All-22 buffering' : 'playing',
-      rate: state.video.playbackRate,
+      w,
+      playing,
+      reason: !w ? 'no synced play here' : prepareOnly ? 'end zone view: loading the next play'
+        : holding ? 'loading this play' : v.paused ? 'All-22 paused'
+        : v.seeking || v.readyState < 2 ? 'All-22 buffering' : 'playing',
+      rate: v.playbackRate,
     });
   }
 
@@ -262,6 +314,13 @@
   }
 
   let lastFollowSeek = 0;
+  let lastReport = 0;
+  function reportAudio(ready) {
+    const now = performance.now();
+    if (now - lastReport < 200) return;
+    lastReport = now;
+    send({ type: 'audioStatus', ready });
+  }
   let lastFollowTime = -1;
   let lastFollowMove = 0;
   let followStatus = 'waiting for the All-22 tab';
@@ -275,9 +334,17 @@
     const b = broadcastTimeFor(msg.w);
     if (b == null) { followStatus = state.anchors.length ? 'waiting for a synced play' : 'no anchor yet: press B at a snap'; if (!v.paused) v.pause(); return; }
     if (!msg.playing) {
-      followStatus = `paused (${msg.reason || 'All-22 not playing'})`;
+      // Not playing: park the broadcast at the target spot so it buffers there in advance.
       lastFollowMove = performance.now(); // don't count a deliberate pause as a stall
       if (!v.paused) v.pause();
+      const nowP = performance.now();
+      if (!v.seeking && Math.abs(v.currentTime - b) > 0.5 && nowP - lastFollowSeek > 1000) {
+        lastFollowSeek = nowP;
+        v.currentTime = b;
+      }
+      const ready = !v.seeking && v.readyState >= 3 && Math.abs(v.currentTime - b) <= 0.6;
+      followStatus = `${ready ? 'ready' : 'loading'} (${msg.reason || 'All-22 not playing'})`;
+      reportAudio(ready);
       return;
     }
     // Stall watchdog: if the broadcast should be playing but its clock hasn't moved for 1.5 s
@@ -298,6 +365,7 @@
     }
     v.muted = false;
     if (v.paused) v.play().catch(() => {});
+    reportAudio(!v.seeking && v.readyState >= 3);
     // Streams can't land exactly where you seek and take a moment to buffer, so constant small
     // seeks would loop the same second of audio. Seek only for big jumps (a new play), at most
     // every 2 seconds, and never mid-seek; close the remaining gap by playing slightly faster or
@@ -1178,6 +1246,11 @@
 
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg?.type === 'audioDrive' && state.isAudioTab) followAudio(msg);
+    if (msg?.type === 'audioStatus' && !state.isAudioTab) {
+      audioLink.at = performance.now();
+      audioLink.ready = !!msg.ready;
+      if (msg.ready) audioLink.readyAt = audioLink.at;
+    }
     if (msg?.type === 'roleChanged') checkRole();
     if (msg?.type === 'key' && state.video) handleKey(msg.code);
   });

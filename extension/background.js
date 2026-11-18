@@ -171,7 +171,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (sender.tab?.id != null) chrome.tabs.sendMessage(sender.tab.id, { type: 'key', code: msg.code }).catch(() => {});
     return false;
   }
+  if (msg?.type === 'audioStatus') {
+    chrome.storage.session.get('driverTabId').then(({ driverTabId }) => {
+      if (driverTabId != null && driverTabId !== sender.tab?.id) chrome.tabs.sendMessage(driverTabId, msg).catch(() => {});
+    });
+    return false;
+  }
   if (msg?.type === 'audioDrive') {
+    if (sender.tab?.id != null) chrome.storage.session.set({ driverTabId: sender.tab.id });
     audioTabId().then((id) => {
       if (id == null || id === sender.tab?.id) return;
       chrome.tabs.sendMessage(id, msg).catch(() => {});
