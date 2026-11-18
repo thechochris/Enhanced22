@@ -58,7 +58,7 @@ var E22Auto = (function () {
   // ---------- scanning ----------
   // Plays the video fast and muted, sampling every displayed frame. Resolves with frames
   // [{ t, diff, horiz, luma }]. Restores the player's state afterwards.
-  async function scan(video, { onProgress, shouldStop, rate = 16 } = {}) {
+  async function scan(video, { onProgress, shouldStop, rate = 16, startAt = 0 } = {}) {
     const canvas = document.createElement('canvas');
     canvas.width = W; canvas.height = H;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -80,7 +80,7 @@ var E22Auto = (function () {
     };
 
     video.muted = true;
-    video.currentTime = 0;
+    video.currentTime = startAt;
     await new Promise((r) => video.addEventListener('seeked', r, { once: true }));
     video.playbackRate = rate;
     await video.play();
@@ -186,7 +186,8 @@ var E22Auto = (function () {
   }
 
   // Needleman-Wunsch style alignment of film clips to play-by-play rows.
-  function align(clips, plays) {
+  // With openEnd (a scan that stopped partway), plays after the last clip cost nothing to skip.
+  function align(clips, plays, { openEnd = false } = {}) {
     const n = clips.length, m = plays.length;
     const durs = plays.map(playDuration);
     const known = durs.filter((d) => d != null);
@@ -215,22 +216,31 @@ var E22Auto = (function () {
     }
     const matches = new Map(); // play index -> clip index
     let i = n, j = m;
+    if (openEnd) {
+      for (let jj = 0; jj <= m; jj++) if (D[n][jj] < D[n][j]) j = jj;
+    }
+    const lastPlay = j - 1;
     while (i > 0 || j > 0) {
       const b = B[i][j];
       if (b === 1) { matches.set(j - 1, i - 1); i--; j--; }
       else if (b === 2) i--;
       else j--;
     }
-    return { matches, pad };
+    return { matches, pad, lastPlay };
   }
 
   // Full pipeline: frames + plays -> marks { playId: { s, e, auto } | { skip, auto } } and a summary.
-  function build(frames, plays) {
+  // partial: the scan covered only the start of the video, so plays past the last clip found
+  // are left unsynced instead of being marked missing.
+  function build(frames, plays, { partial = false } = {}) {
     const shots = labelShots(findShots(frames));
-    const clips = clipsFrom(shots);
-    const { matches, pad } = align(clips, plays);
+    let clips = clipsFrom(shots);
+    // In a partial scan the last sideline clip may be cut off; drop it so it is redone on resume.
+    if (partial && clips.length && shots.length && shots[shots.length - 1].label === 'S') clips = clips.slice(0, -1);
+    const { matches, pad, lastPlay } = align(clips, plays, { openEnd: partial });
     const marks = {};
     plays.forEach((p, j) => {
+      if (partial && j > lastPlay) return;
       const c = matches.has(j) ? clips[matches.get(j)] : null;
       marks[p.id] = c ? { s: c.s, e: c.e, auto: true } : { skip: true, auto: true };
     });

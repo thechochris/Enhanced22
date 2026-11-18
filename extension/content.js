@@ -66,6 +66,7 @@
     state.history = saved.history || [];
     state.anchors = saved.anchors || [];
     renderList();
+    renderAutoButton();
     render();
   }
 
@@ -461,6 +462,7 @@
         state.marks = {};
         state.history = [];
         saveMarks();
+        try { chrome.storage.local.remove(scanKey()).then(renderAutoButton); } catch { /* orphaned */ }
         toast('Sync cleared for this game');
       },
     };
@@ -832,41 +834,78 @@
   }
 
   // ---------- automatic sync ----------
+  // Scan progress is saved per game, so a stopped scan keeps what it found and resumes later.
+  const scanKey = () => `scan:${state.game.gameId}`;
+  const roundFrame = (f) => ({
+    t: Math.round(f.t * 100) / 100, diff: Math.round(f.diff * 1e4) / 1e4,
+    horiz: Math.round(f.horiz * 1e3) / 1e3, luma: Math.round(f.luma * 1e3) / 1e3,
+  });
+
+  async function renderAutoButton() {
+    if (!el.autosync || state.scanning) return;
+    let label = 'Auto-sync game';
+    if (state.game) {
+      const saved = (await storeGet(scanKey()))[scanKey()];
+      if (saved && !saved.complete && saved.duration) {
+        label = `Resume auto-sync (${Math.round((saved.upTo / saved.duration) * 100)}% done)`;
+      } else if (saved?.complete) {
+        label = 'Auto-sync again';
+      }
+    }
+    el.autosync.textContent = label;
+  }
+
   async function runAutoSync() {
     const v = state.video;
     if (!v || !state.game) return toast('Pick the game first');
     if (!Number.isFinite(v.duration) || v.duration < 60) return toast('Start the All-22 replay first, then try again.');
-    if (Object.values(state.marks).some((m) => !m.auto) &&
-        !window.confirm('Auto-sync will replace the plays you synced by hand for this game. Continue?')) return;
+    const key = scanKey();
+    let saved = (await storeGet(key))[key];
+    if (saved && (saved.complete || Math.abs(saved.duration - v.duration) > 5)) saved = null; // fresh run
+    const old = saved ? saved.frames : [];
+    const startAt = saved ? Math.max(0, saved.upTo - 3) : 0;
     state.scanning = true;
     state.stopScan = false;
     el.autosync.classList.add('running');
     el.autosync.textContent = 'Auto-sync: starting… (click to stop)';
     const started = performance.now();
+    const startFrac = startAt / v.duration;
     try {
-      const frames = await E22Auto.scan(v, {
+      const fresh = await E22Auto.scan(v, {
+        startAt,
         shouldStop: () => state.stopScan || dead,
         onProgress: (f) => {
           const pct = Math.round(f * 100);
-          const el2 = (performance.now() - started) / 1000;
-          const eta = f > 0.02 ? Math.round((el2 / f - el2) / 60) : null;
+          const done = f - startFrac;
+          const secs = (performance.now() - started) / 1000;
+          const eta = done > 0.02 ? Math.round(((1 - f) * secs / done) / 60) : null;
           el.autosync.textContent = `Auto-sync: scanning ${pct}%${eta != null ? ` · about ${eta} min left` : ''} (click to stop)`;
         },
       });
-      if (state.stopScan) { toast('Auto-sync stopped. Nothing was changed.'); return; }
-      const { marks, summary } = E22Auto.build(frames, state.plays);
+      if (dead) return;
+      const lastOld = old.length ? old[old.length - 1].t : -1;
+      const frames = old.concat(fresh.filter((f) => f.t > lastOld).map(roundFrame));
+      const upTo = frames.length ? frames[frames.length - 1].t : 0;
+      const complete = !state.stopScan && upTo >= v.duration - 2;
+      await storeSet({ [key]: { frames, upTo, duration: v.duration, complete } });
+
+      const { marks, summary } = E22Auto.build(frames, state.plays, { partial: !complete });
       console.info('[Enhanced22] auto-sync', summary);
-      state.marks = marks;
-      state.history = [];
-      state.lastAutoSummary = summary;
+      // Plays you placed by hand (S or shift-click) win over automatic ones.
+      const manual = Object.fromEntries(Object.entries(state.marks).filter(([, m]) => !m.auto));
+      state.marks = { ...marks, ...manual };
+      state.history = Object.keys(manual);
+      state.lastAutoSummary = { ...summary, complete, upTo };
       saveMarks();
-      toast(`Auto-sync found ${summary.matched} of ${summary.plays} plays. Shift-click a play in the list to fix one.`);
+      toast(complete
+        ? `Auto-sync placed ${summary.matched} of ${summary.plays} plays. Shift-click a play in the list to fix one.`
+        : `Auto-sync paused. Kept ${summary.matched} plays found so far. Click Resume to continue.`);
     } catch (e) {
       toast(`Auto-sync failed: ${e.message}`);
     } finally {
       state.scanning = false;
       el.autosync.classList.remove('running');
-      el.autosync.textContent = 'Auto-sync game';
+      renderAutoButton();
     }
   }
 
