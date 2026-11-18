@@ -237,11 +237,6 @@
     return p.snapAt + (t - snapT) * 1000 + state.audioOffset * 1000;
   }
 
-  function nextSyncedIndex(i) {
-    for (let j = i + 1; j < state.plays.length; j++) if (hasStart(j)) return j;
-    return -1;
-  }
-
   // Broadcast readiness, reported back by the broadcast tab.
   const audioLink = { ready: false, at: 0, readyAt: 0 };
   const audioConnected = () => performance.now() - audioLink.at < 2500;
@@ -280,25 +275,18 @@
     if (now - lastDriveSent < 250) return;
     lastDriveSent = now;
     const v = state.video;
-    const seg = i >= 0 ? segment(i) : null;
-    const inEndZone = !!(seg && seg.end != null && t >= seg.end);
-    // During the end zone replay, preload the broadcast at the start of the next play instead
-    // of playing, so the next play's audio is ready the moment it starts.
-    let w = wallFor(i, t);
-    let prepareOnly = false;
-    if (inEndZone) {
-      const j = nextSyncedIndex(i);
-      if (j >= 0) { w = wallFor(j, markOf(j).s); prepareOnly = true; }
-    }
+    // The broadcast simply keeps running from this play's snap (through the end zone view,
+    // commentary included) until the next play starts, then jumps there.
+    const w = wallFor(i, t);
     const holding = hold.index != null;
-    const playing = !!w && !prepareOnly && !holding && !v.paused && !v.seeking && v.readyState >= 2;
+    const playing = !!w && !holding && !v.paused && !v.seeking && v.readyState >= 2;
     send({
       type: 'audioDrive',
       gameId: state.game.gameId,
       playIndex: i,
       w,
       playing,
-      reason: !w ? 'no synced play here' : prepareOnly ? 'end zone view: loading the next play'
+      reason: !w ? 'no synced play here'
         : holding ? 'loading this play' : v.paused ? 'All-22 paused'
         : v.seeking || v.readyState < 2 ? 'All-22 buffering' : 'playing',
       rate: v.playbackRate,

@@ -36,7 +36,7 @@ Each play in the data has the real wall-clock time of its snap, so after one mat
 2. In the All-22 tab, go to any synced play. Switch to the broadcast tab, find the same snap, and press **B**.
 3. Switch back to the All-22 tab and play. The broadcast tab follows, so you hear its audio over the All-22 film. Mute the All-22 video if it has its own sound.
 
-Press **[** or **]** (in either tab) to nudge the broadcast audio a quarter second earlier or later. During each end zone replay the broadcast quietly loads the next play's spot, and at the start of a play the All-22 video waits (up to 8 seconds) until the broadcast audio is ready. The green bar on the broadcast tab shows what the audio is doing.
+Press **[** or **]** (in either tab) to nudge the broadcast audio a quarter second earlier or later. The broadcast keeps playing through each play's end zone replay and jumps to the next play when it starts. At the start of a play the All-22 video waits (up to 8 seconds) until the broadcast audio is ready. The green bar on the broadcast tab shows what the audio is doing.
 
 If the broadcast replay has cuts (commercial breaks removed), add another **B** anchor after any break where the audio drifts. **U** removes the last anchor. While you're actively using the broadcast tab, it stops following so you can scrub freely.
 
