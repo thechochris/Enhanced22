@@ -235,16 +235,20 @@
     const seg = i >= 0 ? segment(i) : null;
     const m = i >= 0 ? markOf(i) : null;
     // Hand-placed plays start at the snap; auto-synced ones carry an estimated snap.
-    const snapT = m && typeof m.snap === 'number' ? m.snap : seg ? seg.s : 0;
     const inEndZone = !!(seg && seg.end != null && t >= seg.end);
+    // In the end zone replay the play's call plays again, lined up on that view's own snap.
+    const snapT = inEndZone ? seg.end + 1.5
+      : m && typeof m.snap === 'number' ? m.snap : seg ? seg.s : 0;
     const since = t - snapT;
     send({
       type: 'audioDrive',
       gameId: state.game.gameId,
       playIndex: i,
       w: p && p.snapAt ? p.snapAt + since * 1000 + state.audioOffset * 1000 : null,
-      // Quiet during the end zone replay, and while the All-22 video is seeking or buffering.
-      playing: !!p && !state.video.paused && !state.video.seeking && state.video.readyState >= 3 && !inEndZone,
+      // Quiet while the All-22 video is paused, seeking or out of data.
+      playing: !!p && !state.video.paused && !state.video.seeking && state.video.readyState >= 2,
+      reason: !p ? 'no synced play here' : state.video.paused ? 'All-22 paused'
+        : state.video.seeking || state.video.readyState < 2 ? 'All-22 buffering' : 'playing',
       rate: state.video.playbackRate,
     });
   }
@@ -258,6 +262,7 @@
   }
 
   let lastFollowSeek = 0;
+  let followStatus = 'waiting for the All-22 tab';
   function followAudio(msg) {
     state.lastDrive = msg;
     renderAudioBadge();
@@ -266,7 +271,9 @@
     // While you're looking at and using this tab, hands off, so you can scrub and anchor.
     if (document.visibilityState === 'visible' && document.hasFocus()) return;
     const b = broadcastTimeFor(msg.w);
-    if (!msg.playing || b == null) { if (!v.paused) v.pause(); return; }
+    if (b == null) { followStatus = state.anchors.length ? 'waiting for a synced play' : 'no anchor yet: press B at a snap'; if (!v.paused) v.pause(); return; }
+    if (!msg.playing) { followStatus = `paused (${msg.reason || 'All-22 not playing'})`; if (!v.paused) v.pause(); return; }
+    followStatus = `following · drift ${(v.currentTime - b).toFixed(1)} s`;
     v.muted = false;
     if (v.paused) v.play().catch(() => {});
     // Streams can't land exactly where you seek and take a moment to buffer, so constant small
@@ -311,8 +318,8 @@
     el.audio.textContent =
       `Broadcast audio source · ${state.anchors.length} anchor${state.anchors.length === 1 ? '' : 's'}` +
       (p ? ` · Press B at the snap of ${E22.quarter(p.qtr)} ${E22.clock(p.time)} ${E22.typeLabel(p)}` +
-        `${p.pos ? ` (${p.pos})` : ''}` : ' · Waiting for the All-22 tab') +
-      ' · Switch back to the All-22 tab to play in sync';
+        `${p.pos ? ` (${p.pos})` : ''}` : '') +
+      ` · Status: ${followStatus}`;
   }
 
   let skipCooldownUntil = 0;
@@ -1107,6 +1114,7 @@
       game: state.game?.gameId || null,
       synced: state.game ? syncedCount() : 0,
       autoSync: state.lastAutoSummary || null,
+      audio: { isAudioTab: state.isAudioTab, anchors: state.anchors.length, offset: state.audioOffset, status: followStatus, lastDrive: state.lastDrive },
       videos: vids,
       mediaEvents,
       manifests,
