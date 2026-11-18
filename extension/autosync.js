@@ -283,7 +283,9 @@ var E22Auto = (function () {
   const PRE_SNAP_DESC = /^\([^)]*\)\s*(\([^)]*\)\s*)*PENALTY/i;
   const isPreSnap = (p) => p.type === 'no_play' && PRE_SNAP_DESC.test(p.desc || '');
 
-  const SNAP_LEAD = 1.5; // seconds from the start of the sideline view to the snap
+  // Seconds from the start of the sideline view to the snap: 0.35-0.45 s on clean scans
+  // checked against snaps placed by hand.
+  const SNAP_LEAD = 0.4;
 
   function playDuration(p) {
     return p.snapAt && p.endAt && p.endAt > p.snapAt ? (p.endAt - p.snapAt) / 1000 : null;
@@ -298,11 +300,11 @@ var E22Auto = (function () {
     const known = durs.filter((d) => d != null);
     const pad = median(clips.map((c) => c.dur)) - median(known.length ? known : [5]);
     // Very short sideline-looking clips are usually a camera flip inside a play, not a play.
-    const skipClip = clips.map((c) => (c.dur < 4 ? 0.5 : 1.6));
+    const skipClip = clips.map((c) => (c.dur < 4 ? 0.5 : c.dur < 8 ? 1.6 : 2.2));
     // Kicks: the camera follows the ball downfield, so the angle flips more than once and one
     // kickoff or punt can show up as two sideline-looking clips. Let a kick take two clips.
     const isKick = plays.map((p) => p.type === 'kickoff' || p.type === 'punt');
-    const skipPlay = plays.map((p) => (isPreSnap(p) ? 0.1 : 1.2));
+    const skipPlay = plays.map((p) => (isPreSnap(p) ? 0.1 : 1.6));
     const fixedAt = Object.entries(fixed).map(([j, t]) => [Number(j), t]);
     for (const [j] of fixedAt) if (j < skipPlay.length) skipPlay[j] = 10;
     const NEAR_FIX = 4;
@@ -386,7 +388,7 @@ var E22Auto = (function () {
       if (!c) { marks[p.id] = { skip: true, auto: true }; return; }
       const c2 = extended.has(j) ? clips[extended.get(j)] : null;
       if (c2) { marks[p.id] = { s: c.s, e: c2.e, snap: Math.min(c.s + SNAP_LEAD, c.e), auto: true }; return; }
-      // The sideline view opens a moment before the snap (about 1.5 s on real All-22 film).
+      // The sideline view opens a moment before the snap.
       const snap = Math.min(c.s + SNAP_LEAD, c.e);
       marks[p.id] = { s: c.s, e: c.e, snap, auto: true };
     });
@@ -401,6 +403,6 @@ var E22Auto = (function () {
     };
   }
 
-  return { W, H, features, gridDiff, scan, segmentByAngle, findShots, labelShots, clipsFrom, align, build };
+  return { W, H, features, gridDiff, scan, segmentByAngle, findShots, labelShots, clipsFrom, align, build, SNAP_LEAD };
 })();
 if (typeof module !== 'undefined') module.exports = E22Auto;

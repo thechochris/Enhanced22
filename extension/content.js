@@ -240,7 +240,9 @@
     const m = markOf(i);
     const seg = segment(i);
     // Hand-placed plays start at the snap; auto-synced ones carry an estimated snap.
-    const snapT = m && typeof m.snap === 'number' ? m.snap : seg ? seg.s : t;
+    // (Automatic ones are recomputed, so marks saved by older versions get the current lead.)
+    const snapT = m && m.auto && typeof m.s === 'number' ? Math.min(m.s + E22Auto.SNAP_LEAD, m.e ?? Infinity)
+      : m && typeof m.snap === 'number' ? m.snap : seg ? seg.s : t;
     return p.snapAt + (t - snapT) * 1000 + state.audioOffset * 1000;
   }
 
@@ -310,7 +312,7 @@
   // assume the broadcast showed a normal gap's worth, which gets the audio within seconds
   // instead of minutes; an anchor (B) or nudge ([ ]) after the break makes it exact.
   const BREAK_GAP = 140000;
-  const AFTER_BREAK = 45000;
+  const AFTER_BREAK = 16000; // measured: about 15-17 s from the last snap before a break to the first after
   let breakCache = { plays: null, list: [] };
   function breakList() {
     if (breakCache.plays !== state.plays) {
@@ -458,7 +460,12 @@
     const d = state.lastDrive;
     const p = d && d.playIndex >= 0 ? state.plays[d.playIndex] : null;
     el.audio.classList.remove('hidden');
-    if (el.bscan && !state.scanning && !el.bscan.dataset.init) { el.bscan.dataset.init = '1'; renderBscanButton(); }
+    if (el.bscan && !state.scanning && state.game && el.bscan.dataset.init !== state.game.gameId) {
+      el.bscan.dataset.init = state.game.gameId;
+      renderBscanButton();
+      // Re-match a saved broadcast scan with the current version's rules.
+      storeGet(bscanKey()).then((o) => { const sv = o[bscanKey()]; if (sv?.frames?.length && !state.scanning) applyBroadcastScan(sv); });
+    }
     el.atext.textContent =
       `Broadcast audio source · ${state.anchors.length} anchor${state.anchors.length === 1 ? '' : 's'}` +
       (p ? ` · Press B at the snap of ${E22.quarter(p.qtr)} ${E22.clock(p.time)} ${E22.typeLabel(p)}` +
@@ -1268,8 +1275,16 @@
 
   function applyBroadcastScan(saved) {
     const { anchors, summary, detail } = E22Bcast.build(saved.frames, state.plays, { duration: saved.duration });
-    // Your own anchors and nudges stay; earlier automatic ones are replaced.
-    state.anchors = state.anchors.filter((a) => !a.auto).concat(anchors);
+    // Earlier automatic anchors are replaced. Your own anchors and nudges stay, except inside
+    // stretches the scan placed (it is more precise than a key press there).
+    const segs = E22Bcast.segments(state.plays);
+    const placed = new Set(anchors.map((a) => a.w));
+    const segOf = (w) => segs.find((s) => w >= s[0].snapAt - 1500 && w <= s[s.length - 1].snapAt + 1500);
+    state.anchors = state.anchors.filter((a) => {
+      if (a.auto) return false;
+      const s = segOf(a.w);
+      return !(s && placed.has(s[0].snapAt));
+    }).concat(anchors);
     state.lastBscan = { summary, detail };
     saveMarks();
     return summary;

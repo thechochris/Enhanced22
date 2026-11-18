@@ -21,12 +21,10 @@ var E22Bcast = (function () {
     return s[Math.min(s.length - 1, Math.floor(s.length * q))];
   }
 
-  // Candidate snaps: inside a wide (grassy) shot, a still stretch followed by sudden motion.
-  function findSnaps(frames, { before = 1.5, after = 1.0, gap = 4 } = {}) {
+  // Candidate snaps: the field is on screen, the picture has been still for a moment (teams
+  // set, camera waiting), then motion starts and keeps going, with no camera cut in between.
+  function findSnaps(frames, { before = 1.5, after = 1.0, gap = 4, minGreen = 0.15, stillMax = 0.0012 } = {}) {
     if (frames.length < 20) return [];
-    const gThr = Math.max(0.25, 0.55 * quantile(frames.map((f) => f.green || 0), 0.9));
-    const wideDiffs = frames.filter((f) => (f.green || 0) >= gThr).map((f) => f.diff);
-    const calm = quantile(wideDiffs, 0.5) * 1.2 + 1e-4;
     const out = [];
     let last = -Infinity;
     let a = 0; // start of the "before" window
@@ -38,25 +36,29 @@ var E22Bcast = (function () {
       while (b < frames.length && frames[b].t <= t + after) b++;
       if (t - last < gap || k - a < 3 || b - k < 3) continue;
       if (frames[a].t > t - before + 0.4 || frames[b - 1].t < t + after - 0.4) continue; // scan skipped here
-      let pre = 0, post = 0, ok = true;
+      let pre = 0, post = 0, gPre = 0, ok = true;
       for (let j = a; j < k && ok; j++) {
         const f = frames[j];
-        if ((f.green || 0) < gThr || f.diff > 0.03) ok = false; // not wide, or a camera cut
-        pre += f.diff;
-      }
-      if (!ok) continue;
-      for (let j = k; j < b && ok; j++) {
-        const f = frames[j];
-        if ((f.green || 0) < gThr * 0.8 || f.diff > 0.05) ok = false;
-        post += f.diff;
+        if ((f.green || 0) < minGreen || f.diff > 0.004) ok = false;
+        pre += f.diff; gPre += f.green || 0;
       }
       if (!ok) continue;
       pre /= k - a;
-      post /= b - k;
-      if (pre < calm && post > 2.5 * pre + 0.002 && frames[k].diff > pre * 1.5) {
-        out.push(t);
-        last = t;
+      gPre /= k - a;
+      if (pre > stillMax) continue;
+      for (let j = k; j < b && ok; j++) {
+        const f = frames[j];
+        if ((f.green || 0) < gPre * 0.6 || f.diff > 0.03) ok = false; // left the field, or a cut
+        post += f.diff;
       }
+      if (!ok) continue;
+      post /= b - k;
+      if (post < Math.max(3 * pre, pre + 0.0012)) continue;
+      // The snap is the first frame that clearly moves.
+      let j = k;
+      while (j < b - 1 && frames[j].diff < 2 * pre + 0.0008) j++;
+      out.push(frames[j].t);
+      last = frames[j].t;
     }
     return out;
   }
@@ -140,8 +142,9 @@ var E22Bcast = (function () {
         hi = lo + (seg[0].snapAt - prev.endW) / 1000 + 30;
       }
       const fit = fitSegment(seg, cands, lo, hi);
-      const need = Math.max(2, Math.ceil(seg.length * 0.4));
-      const ok = fit && fit.matched >= need && (seg.length >= 3 || fit.matched === seg.length);
+      // At least 3 plays (and 40% of the stretch) must line up; short stretches are left to
+      // the break estimate rather than risk a chance match.
+      const ok = !!fit && seg.length >= 3 && fit.matched >= Math.max(3, Math.ceil(seg.length * 0.4));
       detail.push({ first: seg[0].id, plays: seg.length, matched: fit ? fit.matched : 0, offset: fit ? +fit.o.toFixed(2) : null, ok });
       if (ok) {
         anchors.push({ w: seg[0].snapAt, b: +fit.o.toFixed(3), auto: true });
