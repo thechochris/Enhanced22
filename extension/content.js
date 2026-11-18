@@ -199,10 +199,14 @@
     if (!state.game) { renderStatus(v.currentTime, v); return; }
     const t = v.currentTime;
     const i = currentIndex(t);
-    if (state.prefs.sidelineOnly && !v.paused && i >= 0 && state.suppressSkipFor !== i) {
+    if (state.prefs.sidelineOnly && !v.paused && i >= 0 && state.suppressSkipFor !== i &&
+        performance.now() > skipCooldownUntil) {
       const seg = segment(i);
-      if (seg && seg.end != null && seg.next != null && t >= seg.end && t < seg.next - 0.1) {
-        seek(seg.next);
+      // Only skip a real end zone view: the clip must be long enough to hold two angles, and we
+      // must be well short of the next play (streams often land a second or two early on a seek).
+      if (seg && seg.end != null && seg.next != null && seg.next - seg.s >= 6 &&
+          t >= seg.end && seg.next - t > 1.5) {
+        autoSkip(seg.next);
       }
     }
     if (!state.isAudioTab) { renderBug(i); renderStatus(t, v); }
@@ -282,6 +286,26 @@
       (p ? ` · Press B at the snap of ${E22.quarter(p.qtr)} ${E22.clock(p.time)} ${E22.typeLabel(p)}` +
         `${p.pos ? ` (${p.pos})` : ''}` : ' · Waiting for the All-22 tab') +
       ' · Switch back to the All-22 tab to play in sync';
+  }
+
+  let skipCooldownUntil = 0;
+  let recentSkips = [];
+  function autoSkip(target) {
+    const now = performance.now();
+    recentSkips = recentSkips.filter((x) => now - x < 15000);
+    recentSkips.push(now);
+    if (recentSkips.length > 3) {
+      // Something is off (bad sync marks, or the player fighting our seeks). Stop rather than loop.
+      state.prefs.sidelineOnly = false;
+      savePrefs();
+      render();
+      toast('Auto-skip turned off: it was skipping too often. Check the synced plays, then turn it back on with V.');
+      recentSkips = [];
+      return;
+    }
+    skipCooldownUntil = now + 2000;
+    seek(target);
+    toast('Skipped end zone view · V turns auto-skip off');
   }
 
   function onSeeked() {
@@ -378,7 +402,7 @@
           <header><div class="titlebar"><span class="grip" title="Drag to move">⠿</span><div class="title">Enhanced22</div>
               <button class="change" title="Choose a different game">Change game</button></div><div class="sub"></div>
             <div class="toggles">
-              <label><input type="checkbox" data-pref="sidelineOnly"> Sideline view only</label>
+              <label><input type="checkbox" data-pref="sidelineOnly"> Auto-skip end zone view</label>
               <label><input type="checkbox" data-pref="overlay"> Overlay</label>
               <label><input type="checkbox" data-pref="broadcastAudio"> Broadcast audio</label>
             </div>
@@ -388,6 +412,7 @@
               <button data-act="undo">Undo (Z)</button>
               <button data-act="prev">◀ Prev (P)</button>
               <button data-act="next">Next (N) ▶</button>
+              <button data-act="reset" title="Clear every synced play for this game">Reset sync</button>
             </div>
             <div class="status"></div></header>
           <div class="list"></div>
@@ -407,7 +432,18 @@
     makeDraggable(el.panel, root.querySelector('.panel header'), 'panelPos');
     makeDraggable(el.bug, el.bug, 'bugPos');
     el.controls = root.querySelector('header .controls');
-    const ACTIONS = { mark: markNext, skip: skipNext, undo, prev: () => jump(-1), next: () => jump(1) };
+    let resetArmed = 0;
+    const ACTIONS = {
+      mark: markNext, skip: skipNext, undo, prev: () => jump(-1), next: () => jump(1),
+      reset: () => {
+        if (Date.now() - resetArmed > 4000) { resetArmed = Date.now(); return toast('Click Reset sync again to clear every synced play for this game'); }
+        resetArmed = 0;
+        state.marks = {};
+        state.history = [];
+        saveMarks();
+        toast('Sync cleared for this game');
+      },
+    };
     el.controls.addEventListener('click', (ev) => {
       const b = ev.target.closest('button[data-act]');
       if (!b || !state.video) return;
