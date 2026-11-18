@@ -367,6 +367,7 @@
     renderAudioBadge();
     const v = state.video;
     if (!v || !state.game || msg.gameId !== state.game.gameId || !state.prefs.broadcastAudio) return;
+    if (state.scanning) { followStatus = 'scanning the broadcast'; return; } // the scan drives the video
     // While you're looking at and using this tab, hands off, so you can scrub and anchor.
     if (document.visibilityState === 'visible' && document.hasFocus()) return;
     // Where the All-22 is *now*: the message is a few milliseconds old by the time it lands.
@@ -457,6 +458,7 @@
     const d = state.lastDrive;
     const p = d && d.playIndex >= 0 ? state.plays[d.playIndex] : null;
     el.audio.classList.remove('hidden');
+    if (el.bscan && !state.scanning && !el.bscan.dataset.init) { el.bscan.dataset.init = '1'; renderBscanButton(); }
     el.atext.textContent =
       `Broadcast audio source · ${state.anchors.length} anchor${state.anchors.length === 1 ? '' : 's'}` +
       (p ? ` · Press B at the snap of ${E22.quarter(p.qtr)} ${E22.clock(p.time)} ${E22.typeLabel(p)}` +
@@ -592,7 +594,7 @@
           <div class="l2"><span class="poss"></span><span class="score"></span><span class="badge"></span></div>
           <div class="l3"></div></div>
         <div class="sync hidden"></div>
-        <div class="audio hidden"><span class="atext"></span><button class="astop">Stop using this tab for audio</button></div>
+        <div class="audio hidden"><span class="atext"></span><button class="bscan">Find plays in this broadcast</button><button class="bexport">Export broadcast scan</button><button class="astop">Stop using this tab for audio</button></div>
         <div class="toast"></div>
         <div class="panel">
           <header><div class="titlebar"><span class="grip" title="Drag to move">⠿</span><div class="title">Enhanced22</div>
@@ -637,6 +639,13 @@
     el.controls = root.querySelector('header .controls');
     el.autosync = root.querySelector('header .autosync');
     el.atext = root.querySelector('.audio .atext');
+    el.bscan = root.querySelector('.audio .bscan');
+    el.bscan.addEventListener('click', () => {
+      el.bscan.blur();
+      if (state.scanning) { state.stopScan = true; return; }
+      runBroadcastScan();
+    });
+    root.querySelector('.audio .bexport').addEventListener('click', (ev) => { ev.currentTarget.blur(); exportBroadcastScan(); });
     root.querySelector('.audio .astop').addEventListener('click', async () => {
       await send({ type: 'setAudioTabSelf', on: false });
       if (state.video && !state.video.paused) state.video.pause();
@@ -1241,6 +1250,101 @@
       el.autosync.classList.remove('running');
       renderAutoButton();
     }
+  }
+
+  // ---------- broadcast scan ----------
+  // Finds each play's snap in the broadcast video itself and lines the audio up per stretch
+  // between commercial breaks (see bcastsync.js). Runs in the broadcast tab; resumable.
+  const bscanKey = () => `bscan:${state.game.gameId}`;
+  const roundB = (f) => ({ ...roundFrame(f), green: Math.round((f.green || 0) * 1e3) / 1e3 });
+
+  async function renderBscanButton() {
+    if (!el.bscan || state.scanning || !state.game) return;
+    const saved = (await storeGet(bscanKey()))[bscanKey()];
+    el.bscan.textContent = saved && !saved.complete && saved.duration
+      ? `Resume finding plays (${Math.round((saved.upTo / saved.duration) * 100)}% done)`
+      : saved?.complete ? 'Find plays again' : 'Find plays in this broadcast';
+  }
+
+  function applyBroadcastScan(saved) {
+    const { anchors, summary, detail } = E22Bcast.build(saved.frames, state.plays, { duration: saved.duration });
+    // Your own anchors and nudges stay; earlier automatic ones are replaced.
+    state.anchors = state.anchors.filter((a) => !a.auto).concat(anchors);
+    state.lastBscan = { summary, detail };
+    saveMarks();
+    return summary;
+  }
+
+  async function runBroadcastScan() {
+    const v = state.video;
+    if (!v || !state.game) return toast('Open the broadcast replay and pick the game first');
+    if (!Number.isFinite(v.duration) || v.duration < 60) return toast('Start the broadcast replay first, then try again.');
+    const key = bscanKey();
+    let saved = (await storeGet(key))[key];
+    if (saved && (saved.complete || Math.abs(saved.duration - v.duration) > 5)) saved = null;
+    const old = saved ? saved.frames : [];
+    const startAt = saved ? Math.max(0, saved.upTo - 3) : 0;
+    state.scanning = true;
+    state.stopScan = false;
+    el.bscan.textContent = 'Finding plays: starting… (click to stop)';
+    const started = performance.now();
+    const startFrac = startAt / v.duration;
+    try {
+      const fresh = await E22Auto.scan(v, {
+        startAt,
+        shouldStop: () => state.stopScan || dead,
+        onProgress: (f) => {
+          const done = f - startFrac;
+          const secs = (performance.now() - started) / 1000;
+          const eta = done > 0.02 ? Math.round(((1 - f) * secs / done) / 60) : null;
+          el.bscan.textContent = `Finding plays: ${Math.round(f * 100)}%${eta != null ? ` · about ${eta} min left` : ''} (click to stop)`;
+        },
+      });
+      if (dead) return;
+      const lastOld = old.length ? old[old.length - 1].t : -1;
+      const frames = old.concat(fresh.filter((f) => f.t > lastOld).map(roundB));
+      const upTo = frames.length ? frames[frames.length - 1].t : 0;
+      const complete = !state.stopScan && upTo >= v.duration - 2;
+      const data = { frames, upTo, duration: v.duration, complete };
+      await storeSet({ [key]: data });
+      const sum = applyBroadcastScan(data);
+      toast(sum.placed
+        ? `Found ${sum.playsMatched} snaps in the broadcast and lined up ${sum.placed} of ${sum.segments} stretches between commercial breaks` +
+          (complete ? '.' : ' so far. Click Resume to scan the rest.')
+        : 'Could not line up the broadcast automatically here. Press B at a snap instead, and please send the broadcast scan file.', 9000);
+    } catch (e) {
+      toast(`Broadcast scan failed: ${e.message}`);
+    } finally {
+      state.scanning = false;
+      renderBscanButton();
+    }
+  }
+
+  async function exportBroadcastScan() {
+    if (!state.game) return toast('Pick the game first');
+    const saved = (await storeGet(bscanKey()))[bscanKey()];
+    if (!saved?.frames?.length) return toast('Run "Find plays in this broadcast" first (even a few minutes of it).');
+    const r = E22Bcast.build(saved.frames, state.plays, { duration: saved.duration });
+    const data = {
+      version: chrome.runtime.getManifest().version,
+      game: state.game.gameId,
+      kind: 'broadcast',
+      duration: saved.duration,
+      complete: saved.complete,
+      summary: r.summary,
+      segments: r.detail,
+      anchors: state.anchors,
+      frames: saved.frames.map((f) => [f.t, f.diff, f.horiz, f.luma, f.green]),
+    };
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `enhanced22-broadcast-${state.game.gameId}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast('Saved the broadcast scan file to your Downloads folder');
   }
 
   // ---------- diagnostics ----------

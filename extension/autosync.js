@@ -23,6 +23,7 @@ var E22Auto = (function () {
     const cellH = H / GY;
     const luma = new Float32Array(W * H);
     let sum = 0;
+    let green = 0; // share of grass-colored pixels (high in a broadcast's wide game shot)
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const i = (y * W + x) * 4;
@@ -30,6 +31,7 @@ var E22Auto = (function () {
         const l = 0.299 * r + 0.587 * g + 0.114 * b;
         luma[y * W + x] = l;
         sum += l;
+        if (g > 0.15 && g > r * 1.12 && g > b * 1.12) green++;
         const c = (Math.floor(y / cellH) * GX + Math.floor(x / cellW)) * 3;
         grid[c] += r; grid[c + 1] += g; grid[c + 2] += b;
       }
@@ -46,7 +48,7 @@ var E22Auto = (function () {
         sx += Math.abs(gx); sy += Math.abs(gy);
       }
     }
-    return { grid, horiz: sy / (sx + sy + 1e-9), luma: sum / (W * H) };
+    return { grid, horiz: sy / (sx + sy + 1e-9), luma: sum / (W * H), green: green / (W * H) };
   }
 
   function gridDiff(a, b) {
@@ -75,7 +77,7 @@ var E22Auto = (function () {
     const sample = (t) => {
       ctx.drawImage(video, 0, 0, W, H);
       const f = features(ctx.getImageData(0, 0, W, H).data);
-      frames.push({ t, diff: prev ? gridDiff(prev.grid, f.grid) : 0, horiz: f.horiz, luma: f.luma });
+      frames.push({ t, diff: prev ? gridDiff(prev.grid, f.grid) : 0, horiz: f.horiz, luma: f.luma, green: f.green });
       prev = f;
     };
 

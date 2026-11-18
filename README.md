@@ -60,3 +60,8 @@ If the broadcast replay has cuts (commercial breaks removed), add another **B** 
 ## Play details
 
 Each play in the list and in the on-video overlay shows who had the ball (passer → intended receiver, ball carrier, sacked quarterback, or kick returner), the yards gained or lost, interceptions and lost fumbles, and a red **TD** tag on touchdowns. These come from the same nflverse play-by-play. Seasons downloaded by an older version are downloaded again automatically the first time.
+
+## Finding the plays in the broadcast automatically
+
+On the broadcast tab, click **Find plays in this broadcast** (in the green bar). It fast-forwards through the broadcast once with the sound off (about 15 to 20 minutes for a full game; keep that tab in front). It looks for the moment the wide game camera starts moving after the teams line up, which is the snap, and lines those up with the play-by-play's snap times. Between two commercial breaks, the broadcast's time from snap to snap matches the real time exactly, so one fit per stretch places every play in it. Stretches it can't place fall back to your **B** anchors or to the break estimate. You can stop and resume it. **Export broadcast scan** saves the scan to a file you can send for tuning.
+
