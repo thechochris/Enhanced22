@@ -304,11 +304,13 @@ var E22Auto = (function () {
     const fixedAt = Object.entries(fixed).map(([j, t]) => [Number(j), t]);
     for (const [j] of fixedAt) if (j < skipPlay.length) skipPlay[j] = 10;
     const NEAR_FIX = 4;
-    const matchCost = (i, j) => {
+    // dur: the film length to compare with the play (a kick spread over several clips passes
+    // the whole span, from its first sideline clip to the end of its last).
+    const matchCost = (i, j, dur = clips[i].dur) => {
       if (j in fixed) return Math.abs(clips[i].s - fixed[j]) < NEAR_FIX ? -10 : 10;
       if (fixedAt.some(([, t]) => Math.abs(clips[i].s - t) < NEAR_FIX)) return 10;
       const d = durs[j];
-      const base = d == null ? 0.4 : Math.min(1.2, Math.abs(clips[i].dur - (d + pad)) / 8);
+      const base = d == null ? 0.4 : Math.min(1.2, Math.abs(dur - (d + pad)) / 8);
       const pre = isPreSnap(plays[j]) ? 0.8 : 0;
       return base + pre;
     };
@@ -321,14 +323,16 @@ var E22Auto = (function () {
         const a = D[i - 1][j - 1] + matchCost(i - 1, j - 1);
         const b = D[i - 1][j] + skipClip[i - 1];
         const c = D[i][j - 1] + skipPlay[j - 1];
-        // A kick's follow-up clips (the camera turning to follow the return) are short; taking
-        // them into the kick is favoured, which keeps the next play from landing mid-kick.
-        const tail = (x) => (clips[x].dur < 8 ? -0.6 : 0.4);
+        // A kick's follow-up clips (the camera turning to follow the return) are short. The
+        // whole span is compared with the kick's length, so a kick can't swallow a real play
+        // (say, the field goal before it) just to absorb clips.
+        const tail = (x) => (clips[x].dur < 8 ? -0.2 : 0.4);
+        const span = (a, b) => clips[b].e - clips[a].s;
         const pinned = (x) => fixedAt.some(([jj, t]) => jj !== j - 1 && Math.abs(clips[x].s - t) < NEAR_FIX);
         const k = isKick[j - 1] && i >= 2 && !pinned(i - 1)
-          ? D[i - 2][j - 1] + matchCost(i - 2, j - 1) + tail(i - 1) : Infinity;
+          ? D[i - 2][j - 1] + matchCost(i - 2, j - 1, span(i - 2, i - 1)) + tail(i - 1) : Infinity;
         const k3 = isKick[j - 1] && i >= 3 && clips[i - 1].dur < 4 && !pinned(i - 1) && !pinned(i - 2)
-          ? D[i - 3][j - 1] + matchCost(i - 3, j - 1) + tail(i - 2) + tail(i - 1) : Infinity;
+          ? D[i - 3][j - 1] + matchCost(i - 3, j - 1, span(i - 3, i - 1)) + tail(i - 2) + tail(i - 1) : Infinity;
         const best = Math.min(a, b, c, k, k3);
         D[i][j] = best;
         B[i][j] = best === a ? 1 : best === k ? 4 : best === k3 ? 5 : best === b ? 2 : 3;
