@@ -601,7 +601,7 @@
           <div class="l2"><span class="poss"></span><span class="score"></span><span class="badge"></span></div>
           <div class="l3"></div></div>
         <div class="sync hidden"></div>
-        <div class="audio hidden"><span class="atext"></span><button class="bscan">Find plays in this broadcast</button><button class="bexport">Export broadcast scan</button><button class="astop">Stop using this tab for audio</button></div>
+        <div class="audio hidden"><span class="atext"></span><button class="bscan">Find plays in this broadcast</button><button class="bexport">Export broadcast scan</button><button class="breset">Reset audio sync</button><button class="astop">Stop using this tab for audio</button></div>
         <div class="toast"></div>
         <div class="panel">
           <header><div class="titlebar"><span class="grip" title="Drag to move">⠿</span><div class="title">Enhanced22</div>
@@ -651,6 +651,29 @@
       el.bscan.blur();
       if (state.scanning) { state.stopScan = true; return; }
       runBroadcastScan();
+    });
+    const breset = root.querySelector('.audio .breset');
+    let audioResetArmed = -Infinity;
+    breset.addEventListener('click', async () => {
+      breset.blur();
+      if (state.scanning) return toast('Stop the broadcast scan first.');
+      // Two clicks, so a stray click can't wipe it.
+      if (performance.now() - audioResetArmed > 4000) {
+        audioResetArmed = performance.now();
+        breset.textContent = 'Click again to reset';
+        setTimeout(() => { breset.textContent = 'Reset audio sync'; }, 4000);
+        return;
+      }
+      audioResetArmed = -Infinity;
+      breset.textContent = 'Reset audio sync';
+      if (!state.game) return;
+      state.anchors = [];
+      state.audioOffset = 0;
+      state.lastBscan = null;
+      saveMarks();
+      await new Promise((r) => { try { chrome.storage.local.remove(bscanKey()).then(r, r); } catch { r(); } });
+      if (el.bscan) el.bscan.textContent = 'Find plays in this broadcast';
+      toast('Audio sync reset: anchors, nudges and the broadcast scan are cleared. Press B at a snap or find plays again.', 6000);
     });
     root.querySelector('.audio .bexport').addEventListener('click', (ev) => { ev.currentTarget.blur(); exportBroadcastScan(); });
     root.querySelector('.audio .astop').addEventListener('click', async () => {
