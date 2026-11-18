@@ -665,12 +665,12 @@
   }
 
   let toastTimer = null;
-  function toast(msg) {
+  function toast(msg, ms = 1800) {
     if (!el.toast) return;
     el.toast.textContent = msg;
     el.toast.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.toast.classList.remove('show'), 1800);
+    toastTimer = setTimeout(() => el.toast.classList.remove('show'), ms);
   }
 
   let lastBugIndex = null;
@@ -1161,7 +1161,10 @@
       state.history = Object.keys(manual);
       state.lastAutoSummary = { ...summary, complete, upTo };
       saveMarks();
-      toast(complete
+      if (summary.coverage < 0.9) {
+        toast(`The scan missed ${Math.round((1 - summary.coverage) * 100)}% of the video, so some plays may be off. ` +
+          'Run Auto-sync again with this tab in front and nothing else busy.', 9000);
+      } else toast(complete
         ? `Auto-sync placed ${summary.matched} of ${summary.plays} plays. Shift-click a play in the list to fix one.`
         : `Auto-sync paused. Kept ${summary.matched} plays found so far. Click Resume to continue.`);
     } catch (e) {

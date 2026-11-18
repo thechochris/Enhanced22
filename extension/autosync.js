@@ -82,25 +82,56 @@ var E22Auto = (function () {
     video.muted = true;
     video.currentTime = startAt;
     await new Promise((r) => video.addEventListener('seeked', r, { once: true }));
+    const maxRate = rate;
     video.playbackRate = rate;
     await video.play();
 
-    await new Promise((resolve) => {
-      const useRvfc = typeof video.requestVideoFrameCallback === 'function';
-      let lastT = -1;
-      const done = () => resolve();
-      const step = (_now, meta) => {
-        if (shouldStop?.()) return done();
-        const t = meta ? meta.mediaTime : video.currentTime;
-        if (t !== lastT) { sample(t); lastT = t; }
-        onProgress?.(Math.min(1, t / (video.duration || 1)));
-        if (video.ended || (video.duration && t >= video.duration - 0.5)) return done();
-        if (video.paused && !video.ended) video.play().catch(() => {}); // keep going if the player paused itself
-        if (useRvfc) video.requestVideoFrameCallback(step);
-        else setTimeout(() => step(), 40);
-      };
-      if (useRvfc) video.requestVideoFrameCallback(step); else step();
-    });
+    // Chrome can't draw every frame at high speed (busy machine, slow network, or the tab in
+    // the background), and the frames it drops are often right at the camera cuts we need.
+    // When the scan jumps over more than GAP seconds, go back and replay that stretch slower;
+    // speed back up after a clean stretch. While the tab is hidden, pause instead of skipping.
+    const GAP = 0.6;
+    const onVis = () => {
+      if (document.hidden) video.pause();
+      else video.play().catch(() => {});
+    };
+    document.addEventListener('visibilitychange', onVis);
+    try {
+      await new Promise((resolve) => {
+        const useRvfc = typeof video.requestVideoFrameCallback === 'function';
+        let lastT = -1;
+        let retries = 0;
+        let retryFrom = -1;
+        let calmSince = startAt;
+        const done = () => resolve();
+        const next = () => { if (useRvfc) video.requestVideoFrameCallback(step); else setTimeout(() => step(), 40); };
+        const step = (_now, meta) => {
+          if (shouldStop?.()) return done();
+          if (document.hidden || video.seeking) return next();
+          const t = meta ? meta.mediaTime : video.currentTime;
+          if (lastT >= 0 && t - lastT > GAP) {
+            if (Math.abs(lastT - retryFrom) > 0.05) { retryFrom = lastT; retries = 0; }
+          }
+          if (lastT >= 0 && t - lastT > GAP && retries < 3) {
+            retries++;
+            rate = Math.max(1, rate / 2);
+            video.playbackRate = rate;
+            video.currentTime = lastT + 0.01;
+            calmSince = lastT;
+            return next();
+          }
+          if (t > lastT) { sample(t); lastT = t; } // after 3 tries, accept the gap and move on
+          if (rate < maxRate && t - calmSince > 15) { rate = Math.min(maxRate, rate * 2); video.playbackRate = rate; calmSince = t; }
+          onProgress?.(Math.min(1, t / (video.duration || 1)));
+          if (video.ended || (video.duration && t >= video.duration - 0.5)) return done();
+          if (video.paused && !video.ended) video.play().catch(() => {}); // keep going if the player paused itself
+          next();
+        };
+        next();
+      });
+    } finally {
+      document.removeEventListener('visibilitychange', onVis);
+    }
 
     video.pause();
     video.playbackRate = saved.rate;
@@ -321,6 +352,18 @@ var E22Auto = (function () {
     return { matches, extended, pad, lastPlay };
   }
 
+  // Share of the scanned stretch actually seen (frames no more than 0.6 s apart). Missed
+  // stretches tend to hide camera cuts, which is what throws the play matching off.
+  function coverage(frames) {
+    if (frames.length < 2) return 0;
+    let missed = 0;
+    for (let k = 1; k < frames.length; k++) {
+      const g = frames[k].t - frames[k - 1].t;
+      if (g > 0.6) missed += g;
+    }
+    return 1 - missed / Math.max(1e-9, frames[frames.length - 1].t - frames[0].t);
+  }
+
   // Full pipeline: frames + plays -> marks { playId: { s, e, auto } | { skip, auto } } and a summary.
   // partial: the scan covered only the start of the video, so plays past the last clip found
   // are left unsynced instead of being marked missing.
@@ -348,7 +391,7 @@ var E22Auto = (function () {
         shots: shots.map((x) => ({ s: +x.s.toFixed(2), e: +x.e.toFixed(2), label: x.label, horiz: +x.horiz.toFixed(3) })),
         matches: [...matches].map(([j, c]) => [plays[j].id, c]),
       },
-      summary: { shots: shots.length, clips: clips.length, matched: matches.size, plays: plays.length, pad, alternating },
+      summary: { shots: shots.length, clips: clips.length, matched: matches.size, plays: plays.length, pad, alternating, coverage: coverage(frames) },
     };
   }
 
