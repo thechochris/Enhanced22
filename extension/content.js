@@ -402,7 +402,11 @@
         toast('Moved this play\'s start to the current time');
         return;
       }
-      if (!hasStart(i)) return;
+      if (!hasStart(i)) {
+        return toast(markOf(i)?.skip
+          ? 'You marked this play as not in the replay'
+          : 'Not synced yet, so its spot in the video is unknown. Sync up to it first (S at each snap).');
+      }
       seek(markOf(i).s);
       state.video.play?.();
     });
@@ -492,7 +496,7 @@
       const row = document.createElement('div');
       row.className = `row${m?.skip ? ' skip' : typeof m?.s === 'number' ? '' : ' unsynced'}`;
       row.dataset.i = i;
-      row.title = m?.skip ? 'Not in the replay' : typeof m?.s === 'number' ? 'Jump to this play' : 'Not synced yet';
+      row.title = m?.skip ? 'Not in the replay' : typeof m?.s === 'number' ? 'Click to jump to this play' : 'Not synced yet: press S at its snap to make it clickable';
       const t = document.createElement('span'); t.className = 't'; t.textContent = `${E22.quarter(p.qtr)} ${E22.clock(p.time)}`;
       const pos = document.createElement('span'); pos.className = 'pos'; pos.textContent = p.pos || '';
       const ty = document.createElement('span'); ty.className = 'ty';
