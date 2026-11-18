@@ -125,8 +125,12 @@
     return best;
   }
 
-  function seek(t) {
+  // Every jump the extension makes goes through here and says why on screen, so a jump with
+  // no message didn't come from Enhanced22.
+  function seek(t, reason) {
     if (!state.video) return;
+    console.info('[Enhanced22] seek', reason, state.video.currentTime, '->', t);
+    toast(`Enhanced22 jumped (${reason}): ${fmtTime(state.video.currentTime)} → ${fmtTime(t)}`);
     state.internalSeek = true;
     state.video.currentTime = Math.max(0, t);
   }
@@ -189,7 +193,7 @@
     let pos = synced.indexOf(cur);
     if (delta < 0 && cur >= 0 && t - markOf(cur).s > 2) pos += 1; // first "prev" restarts current play
     const target = synced[Math.min(synced.length - 1, Math.max(0, pos + delta))];
-    if (target != null) seek(markOf(target).s);
+    if (target != null) seek(markOf(target).s, delta > 0 ? 'Next play' : 'Previous play');
   }
 
   // ---------- skipping the end zone view ----------
@@ -249,14 +253,17 @@
     state.lastDrive = msg;
     renderAudioBadge();
     const v = state.video;
-    if (!v || !state.game || msg.gameId !== state.game.gameId) return;
+    if (!v || !state.game || msg.gameId !== state.game.gameId || !state.prefs.broadcastAudio) return;
     // While you're looking at and using this tab, hands off, so you can scrub and anchor.
     if (document.visibilityState === 'visible' && document.hasFocus()) return;
     const b = broadcastTimeFor(msg.w);
     if (!msg.playing || b == null) { if (!v.paused) v.pause(); return; }
     v.muted = false;
     if (v.playbackRate !== msg.rate) v.playbackRate = msg.rate;
-    if (Math.abs(v.currentTime - b) > 0.4) v.currentTime = b;
+    if (Math.abs(v.currentTime - b) > 0.4) {
+      console.info('[Enhanced22] broadcast audio follow', v.currentTime, '->', b);
+      v.currentTime = b;
+    }
     if (v.paused) v.play().catch(() => {});
   }
 
@@ -305,7 +312,7 @@
       return;
     }
     skipCooldownUntil = now + 2000;
-    seek(target);
+    seek(target, 'auto-skip end zone view');
     toast(`Skipped at ${fmtTime(t)} (play synced at ${fmtTime(seg.s)}, next at ${fmtTime(seg.next)}) · V turns it off`);
   }
 
@@ -472,7 +479,7 @@
           ? 'You marked this play as not in the replay'
           : 'Not synced yet, so its spot in the video is unknown. Sync up to it first (S at each snap).');
       }
-      seek(markOf(i).s);
+      seek(markOf(i).s, 'clicked play in list');
       state.video.play?.();
     });
     // Keep keyboard focus on the page, not the checkboxes.
