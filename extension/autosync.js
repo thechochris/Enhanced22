@@ -179,7 +179,14 @@ var E22Auto = (function () {
       runs.push({ label: cur, i: k, j: k });
     }
     // Boundary between frame k-1 and k: the middle of any gap the fast scan jumped over.
-    const startOf = (r) => (r.i === 0 ? frames[0].t : (frames[r.i - 1].t + frames[r.i].t) / 2);
+    // When the change happened inside a gap the scan skipped over, a sideline shot is placed at
+    // the start of the gap (better to land a moment early, before the snap, than late).
+    const startOf = (r) => {
+      if (r.i === 0) return frames[0].t;
+      const a = frames[r.i - 1].t, b = frames[r.i].t;
+      if (b - a > 0.5) return r.label === 'S' ? a + 0.1 : (a + b) / 2;
+      return (a + b) / 2;
+    };
     const endOf = (r, next) => (next ? startOf(next) : frames[r.j].t);
     const span = (k) => endOf(runs[k], runs[k + 1]) - startOf(runs[k]);
     // Absorb flickers shorter than minRun into their neighbors.
@@ -238,9 +245,12 @@ var E22Auto = (function () {
   }
 
   // ---------- matching clips to plays ----------
-  const PRE_SNAP = /False Start|Delay of Game|Encroachment|Neutral Zone Infraction|Illegal Substitution|Too Many Men|Illegal Shift|Defensive Offside|Offside on Free Kick/i;
+  // A "no play" that never got snapped (false start, delay of game...): its description goes
+  // straight to the penalty, with no run or pass before it. Those are not on film.
+  const PRE_SNAP_DESC = /^\([^)]*\)\s*(\([^)]*\)\s*)*PENALTY/i;
+  const isPreSnap = (p) => p.type === 'no_play' && PRE_SNAP_DESC.test(p.desc || '');
 
-  const SNAP_TAIL = 1.5; // seconds between the whistle and the cut to the end zone view
+  const SNAP_LEAD = 1.5; // seconds from the start of the sideline view to the snap
 
   function playDuration(p) {
     return p.snapAt && p.endAt && p.endAt > p.snapAt ? (p.endAt - p.snapAt) / 1000 : null;
@@ -254,8 +264,11 @@ var E22Auto = (function () {
     const durs = plays.map(playDuration);
     const known = durs.filter((d) => d != null);
     const pad = median(clips.map((c) => c.dur)) - median(known.length ? known : [5]);
-    const SKIP_CLIP = 2.0;
-    const skipPlay = plays.map((p) => (p.type === 'no_play' && PRE_SNAP.test(p.desc || '') ? 0.1 : 1.2));
+    const skipClip = clips.map(() => 1.6);
+    // Kicks: the camera follows the ball downfield, so the angle flips more than once and one
+    // kickoff or punt can show up as two sideline-looking clips. Let a kick take two clips.
+    const isKick = plays.map((p) => p.type === 'kickoff' || p.type === 'punt');
+    const skipPlay = plays.map((p) => (isPreSnap(p) ? 0.1 : 1.2));
     const fixedAt = Object.entries(fixed).map(([j, t]) => [Number(j), t]);
     for (const [j] of fixedAt) if (j < skipPlay.length) skipPlay[j] = 10;
     const NEAR_FIX = 4;
@@ -263,25 +276,28 @@ var E22Auto = (function () {
       if (j in fixed) return Math.abs(clips[i].s - fixed[j]) < NEAR_FIX ? -10 : 10;
       if (fixedAt.some(([, t]) => Math.abs(clips[i].s - t) < NEAR_FIX)) return 10;
       const d = durs[j];
-      const base = d == null ? 0.6 : Math.min(2, Math.abs(clips[i].dur - (d + pad)) / 4);
-      const pre = plays[j].type === 'no_play' && PRE_SNAP.test(plays[j].desc || '') ? 0.8 : 0;
+      const base = d == null ? 0.4 : Math.min(1.2, Math.abs(clips[i].dur - (d + pad)) / 8);
+      const pre = isPreSnap(plays[j]) ? 0.8 : 0;
       return base + pre;
     };
     const D = Array.from({ length: n + 1 }, () => new Float64Array(m + 1));
-    const B = Array.from({ length: n + 1 }, () => new Uint8Array(m + 1)); // 1 match, 2 skip clip, 3 skip play
-    for (let i = 1; i <= n; i++) { D[i][0] = D[i - 1][0] + SKIP_CLIP; B[i][0] = 2; }
+    const B = Array.from({ length: n + 1 }, () => new Uint8Array(m + 1)); // 1 match, 2 skip clip, 3 skip play, 4 kick over two clips
+    for (let i = 1; i <= n; i++) { D[i][0] = D[i - 1][0] + skipClip[i - 1]; B[i][0] = 2; }
     for (let j = 1; j <= m; j++) { D[0][j] = D[0][j - 1] + skipPlay[j - 1]; B[0][j] = 3; }
     for (let i = 1; i <= n; i++) {
       for (let j = 1; j <= m; j++) {
         const a = D[i - 1][j - 1] + matchCost(i - 1, j - 1);
-        const b = D[i - 1][j] + SKIP_CLIP;
+        const b = D[i - 1][j] + skipClip[i - 1];
         const c = D[i][j - 1] + skipPlay[j - 1];
-        if (a <= b && a <= c) { D[i][j] = a; B[i][j] = 1; }
-        else if (b <= c) { D[i][j] = b; B[i][j] = 2; }
-        else { D[i][j] = c; B[i][j] = 3; }
+        const k = isKick[j - 1] && i >= 2 && !(j - 1 in fixed && Math.abs(clips[i - 1].s - fixed[j - 1]) < NEAR_FIX)
+          ? D[i - 2][j - 1] + matchCost(i - 2, j - 1) + 0.2 : Infinity;
+        const best = Math.min(a, b, c, k);
+        D[i][j] = best;
+        B[i][j] = best === a ? 1 : best === k ? 4 : best === b ? 2 : 3;
       }
     }
     const matches = new Map(); // play index -> clip index
+    const extended = new Map(); // kick play index -> second clip index
     let i = n, j = m;
     if (openEnd) {
       for (let jj = 0; jj <= m; jj++) if (D[n][jj] < D[n][j]) j = jj;
@@ -290,10 +306,11 @@ var E22Auto = (function () {
     while (i > 0 || j > 0) {
       const b = B[i][j];
       if (b === 1) { matches.set(j - 1, i - 1); i--; j--; }
+      else if (b === 4) { matches.set(j - 1, i - 2); extended.set(j - 1, i - 1); i -= 2; j--; }
       else if (b === 2) i--;
       else j--;
     }
-    return { matches, pad, lastPlay };
+    return { matches, extended, pad, lastPlay };
   }
 
   // Full pipeline: frames + plays -> marks { playId: { s, e, auto } | { skip, auto } } and a summary.
@@ -304,16 +321,16 @@ var E22Auto = (function () {
     let clips = clipsFrom(shots);
     // In a partial scan the last sideline clip may be cut off; drop it so it is redone on resume.
     if (partial && clips.length && shots.length && shots[shots.length - 1].label === 'S') clips = clips.slice(0, -1);
-    const { matches, pad, lastPlay } = align(clips, plays, { openEnd: partial, fixed });
+    const { matches, extended, pad, lastPlay } = align(clips, plays, { openEnd: partial, fixed });
     const marks = {};
     plays.forEach((p, j) => {
       if (partial && j > lastPlay) return;
       const c = matches.has(j) ? clips[matches.get(j)] : null;
       if (!c) { marks[p.id] = { skip: true, auto: true }; return; }
-      // The clip starts before the snap. Estimate the snap from the clip's end (the cut to the
-      // end zone view comes shortly after the whistle) minus the play's real length.
-      const d = playDuration(p);
-      const snap = d != null ? Math.max(c.s, c.e - d - SNAP_TAIL) : c.s;
+      const c2 = extended.has(j) ? clips[extended.get(j)] : null;
+      if (c2) { marks[p.id] = { s: c.s, e: c2.e, snap: Math.min(c.s + SNAP_LEAD, c.e), auto: true }; return; }
+      // The sideline view opens a moment before the snap (about 1.5 s on real All-22 film).
+      const snap = Math.min(c.s + SNAP_LEAD, c.e);
       marks[p.id] = { s: c.s, e: c.e, snap, auto: true };
     });
     const alternating = shots.slice(1).filter((x, k) => x.label !== shots[k].label).length / Math.max(1, shots.length - 1);
