@@ -27,7 +27,7 @@
   async function loadActiveGame() {
     const { activeGame, prefs } = await chrome.storage.local.get(['activeGame', 'prefs']);
     if (prefs) state.prefs = { ...state.prefs, ...prefs };
-    if (!activeGame) { state.game = null; state.plays = []; render(); return; }
+    if (!activeGame) { state.game = null; state.plays = []; renderList(); render(); return; }
     const pk = `plays:${activeGame.gameId}`;
     const mk = `marks:${activeGame.gameId}`;
     const data = await chrome.storage.local.get([pk, mk]);
@@ -53,7 +53,8 @@
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
-    if (changes.activeGame || changes.prefs) { loadActiveGame(); return; }
+    if (changes.activeGame) { loadActiveGame(); return; }
+    if (changes.prefs) { state.prefs = { ...state.prefs, ...(changes.prefs.newValue || {}) }; render(); }
     if (state.game && changes[marksKey()]) {
       const v = changes[marksKey()].newValue || {};
       state.marks = v.marks || {};
@@ -293,7 +294,22 @@
     .panel { position: absolute; top: 12px; right: 12px; bottom: 56px; width: 290px; pointer-events: auto;
       background: rgba(10,14,22,.88); color: #fff; border-radius: 8px; display: flex; flex-direction: column;
       overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,.4); }
-    .panel header { padding: 8px 10px; font-size: 13px; font-weight: 600; border-bottom: 1px solid #2a3245; }
+    .panel header { padding: 8px 10px; font-size: 13px; font-weight: 600; border-bottom: 1px solid #2a3245;
+      cursor: move; user-select: none; }
+    .titlebar { display: flex; align-items: center; gap: 6px; }
+    .titlebar .title { flex: 1; }
+    .grip { color: #9aa6bd; }
+    .change { font: inherit; font-size: 11px; color: #9ec0ff; background: none; border: 0; cursor: pointer; padding: 0; }
+    .change:hover { text-decoration: underline; }
+    .bug { pointer-events: auto; cursor: move; user-select: none; }
+    .picker { padding: 10px; font-size: 12px; }
+    .picker p { margin: 0 0 8px; color: #cfd6e4; line-height: 1.4; }
+    .picker select { font: inherit; margin-left: 6px; }
+    .picker .wk { color: #9aa6bd; font-weight: 600; margin: 10px 0 4px; }
+    .picker .g { padding: 6px 8px; border-radius: 4px; cursor: pointer; display: flex; justify-content: space-between; }
+    .picker .g:hover { background: #2f6fed; }
+    .picker .g.guess { background: #1f3b78; }
+    .picker .d { color: #9aa6bd; }
     .panel header .sub { font-weight: 400; color: #9aa6bd; font-size: 12px; margin-top: 2px; }
     .panel .toggles { display: flex; gap: 10px; margin-top: 6px; font-weight: 400; font-size: 12px; color: #cfd6e4; }
     .panel .toggles label { cursor: pointer; display: flex; gap: 4px; align-items: center; }
@@ -331,7 +347,8 @@
         <div class="audio hidden"></div>
         <div class="toast"></div>
         <div class="panel">
-          <header><div class="title">Enhanced22</div><div class="sub"></div>
+          <header><div class="titlebar"><span class="grip" title="Drag to move">⠿</span><div class="title">Enhanced22</div>
+              <button class="change" title="Choose a different game">Change game</button></div><div class="sub"></div>
             <div class="toggles">
               <label><input type="checkbox" data-pref="sidelineOnly"> Sideline view only</label>
               <label><input type="checkbox" data-pref="overlay"> Overlay</label>
@@ -358,12 +375,15 @@
     el.title = root.querySelector('header .title');
     el.sub = root.querySelector('header .sub');
     el.status = root.querySelector('header .status');
+    root.querySelector('header .change').addEventListener('click', () => { state.picking = true; renderList(); });
+    makeDraggable(el.panel, root.querySelector('.panel header'), 'panelPos');
+    makeDraggable(el.bug, el.bug, 'bugPos');
     el.controls = root.querySelector('header .controls');
     const ACTIONS = { mark: markNext, skip: skipNext, undo, prev: () => jump(-1), next: () => jump(1) };
     el.controls.addEventListener('click', (ev) => {
       const b = ev.target.closest('button[data-act]');
       if (!b || !state.video) return;
-      if (!state.game) return toast('Pick this game in the Enhanced22 toolbar button first');
+      if (!state.game) return toast('Pick the game from the list below first');
       ACTIONS[b.dataset.act]();
       b.blur();
     });
@@ -450,13 +470,10 @@
     if (!root) return;
     el.list.innerHTML = '';
     lastBugIndex = null;
-    if (!state.game) {
+    if (!state.game || state.picking) {
       el.title.textContent = 'Enhanced22';
       el.sub.textContent = '';
-      const d = document.createElement('div');
-      d.className = 'empty';
-      d.textContent = 'Pick this game in the Enhanced22 toolbar button to load its plays.';
-      el.list.appendChild(d);
+      renderPicker();
       return;
     }
     el.title.textContent = `${state.game.away} at ${state.game.home} · Week ${state.game.week}`;
@@ -490,6 +507,131 @@
     el.list.appendChild(frag);
   }
 
+  // ---------- game picker (inside the panel) ----------
+  const NICK = {
+    ARI: 'cardinals', ATL: 'falcons', BAL: 'ravens', BUF: 'bills', CAR: 'panthers', CHI: 'bears',
+    CIN: 'bengals', CLE: 'browns', DAL: 'cowboys', DEN: 'broncos', DET: 'lions', GB: 'packers',
+    HOU: 'texans', IND: 'colts', JAX: 'jaguars', KC: 'chiefs', LV: 'raiders', LAC: 'chargers',
+    LA: 'rams', MIA: 'dolphins', MIN: 'vikings', NE: 'patriots', NO: 'saints', NYG: 'giants',
+    NYJ: 'jets', PHI: 'eagles', PIT: 'steelers', SF: '49ers', SEA: 'seahawks', TB: 'buccaneers',
+    TEN: 'titans', WAS: 'commanders',
+  };
+  function pageText() {
+    let t = `${location.href} ${document.title}`;
+    try { t += ` ${window.top.location.href} ${window.top.document.title}`; } catch { /* cross-origin */ }
+    return t.toLowerCase();
+  }
+  const defaultSeason = () => { const d = new Date(); return d.getMonth() >= 7 ? d.getFullYear() : d.getFullYear() - 1; };
+  let pickerSeason = null;
+
+  async function renderPicker() {
+    const box = document.createElement('div');
+    box.className = 'picker';
+    const intro = document.createElement('p');
+    intro.textContent = 'Which game is this replay? Pick it once and its plays load into this list.';
+    const sel = document.createElement('select');
+    const lab = document.createElement('label');
+    lab.textContent = 'Season';
+    for (let y = defaultSeason(); y >= 2016; y--) {
+      const o = document.createElement('option'); o.value = o.textContent = y; sel.appendChild(o);
+    }
+    pickerSeason = pickerSeason || (state.game ? Number(state.game.gameId.slice(0, 4)) : defaultSeason());
+    sel.value = pickerSeason;
+    sel.addEventListener('change', () => { pickerSeason = Number(sel.value); renderList(); });
+    lab.appendChild(sel);
+    const status = document.createElement('p');
+    status.textContent = 'Loading games… (the first time takes a few seconds)';
+    box.append(intro, lab, status);
+    if (state.game) {
+      const back = document.createElement('button');
+      back.className = 'change';
+      back.textContent = `Keep ${state.game.away} at ${state.game.home}`;
+      back.addEventListener('click', () => { state.picking = false; renderList(); render(); });
+      box.insertBefore(back, lab);
+    }
+    el.list.innerHTML = '';
+    el.list.appendChild(box);
+
+    const season = pickerSeason;
+    let r;
+    try { r = await chrome.runtime.sendMessage({ type: 'getGames', season }); } catch (e) { r = { ok: false, error: String(e) }; }
+    if (season !== pickerSeason || !box.isConnected) return;
+    if (!r?.ok) { status.textContent = `Couldn't load games: ${r?.error || 'unknown error'}`; return; }
+    status.remove();
+    const text = pageText();
+    const isGuess = (g) => NICK[g.home] && NICK[g.away] && text.includes(NICK[g.home]) && text.includes(NICK[g.away]);
+    const row = (g, guess) => {
+      const d = document.createElement('div');
+      d.className = `g${guess ? ' guess' : ''}`;
+      const n = document.createElement('span'); n.textContent = `${g.away} at ${g.home}`;
+      const dt = document.createElement('span'); dt.className = 'd'; dt.textContent = guess ? 'This replay?' : g.date;
+      d.append(n, dt);
+      d.addEventListener('click', () => {
+        state.picking = false;
+        chrome.storage.local.set({ activeGame: g });
+      });
+      return d;
+    };
+    const guesses = r.games.filter(isGuess);
+    if (guesses.length) {
+      const h = document.createElement('div'); h.className = 'wk'; h.textContent = 'Looks like';
+      box.appendChild(h);
+      guesses.slice(-3).reverse().forEach((g) => box.appendChild(row(g, true)));
+    }
+    let wk = null;
+    for (const g of [...r.games].reverse()) {
+      if (g.week !== wk) {
+        wk = g.week;
+        const h = document.createElement('div'); h.className = 'wk';
+        h.textContent = g.seasonType === 'POST' ? `Playoffs · Week ${wk}` : `Week ${wk}`;
+        box.appendChild(h);
+      }
+      box.appendChild(row(g, false));
+    }
+  }
+
+  // ---------- dragging ----------
+  // Positions are saved as fractions of the video size so they survive resizing and fullscreen.
+  function makeDraggable(node, handle, prefKey) {
+    handle.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0 || ev.target.closest('button, input, select, label, .list')) return;
+      ev.preventDefault();
+      const wrap = root.querySelector('.wrap').getBoundingClientRect();
+      const start = node.getBoundingClientRect();
+      const dx = ev.clientX - start.left;
+      const dy = ev.clientY - start.top;
+      handle.setPointerCapture(ev.pointerId);
+      const move = (e) => {
+        const x = Math.min(Math.max(e.clientX - dx - wrap.left, -start.width + 60), wrap.width - 60);
+        const y = Math.min(Math.max(e.clientY - dy - wrap.top, 0), Math.max(0, wrap.height - Math.min(start.height, wrap.height * 0.75)));
+        state.prefs[prefKey] = { x: x / wrap.width, y: y / wrap.height };
+        applyPositions();
+      };
+      const up = () => {
+        handle.removeEventListener('pointermove', move);
+        handle.removeEventListener('pointerup', up);
+        savePrefs();
+      };
+      handle.addEventListener('pointermove', move);
+      handle.addEventListener('pointerup', up);
+    });
+    handle.addEventListener('dblclick', () => { delete state.prefs[prefKey]; savePrefs(); applyPositions(); });
+  }
+
+  function applyPositions() {
+    if (!root) return;
+    for (const [node, key] of [[el.panel, 'panelPos'], [el.bug, 'bugPos']]) {
+      const p = state.prefs[key];
+      if (p) {
+        Object.assign(node.style, { left: `${p.x * 100}%`, top: `${p.y * 100}%`, right: 'auto' });
+        if (node === el.panel) node.style.bottom = 'auto';
+      } else {
+        node.style.left = node.style.top = node.style.right = node.style.bottom = '';
+      }
+    }
+    el.panel.style.height = state.prefs.panelPos ? '75%' : '';
+  }
+
   let highlighted = null;
   function highlightRow(i) {
     if (highlighted) highlighted.classList.remove('cur');
@@ -517,6 +659,7 @@
 
   function render() {
     if (!root) return;
+    applyPositions();
     if (state.isAudioTab) {
       el.panel.classList.add('hidden');
       el.bug.classList.add('hidden');

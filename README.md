@@ -18,12 +18,14 @@ The extension only reads the player's position and seeks it, like you would with
 
 ## Watching a game
 
-1. Click the Enhanced22 button, pick the season and the game. The first time, it downloads that season's play-by-play (about 10 MB).
-2. Open the game's All-22 replay on NFL+. The overlay and play list appear on the video.
+1. Open the game's All-22 replay on NFL+. The Enhanced22 panel appears on the video.
+2. Pick the game in the panel (it suggests the one matching the page when it can). The first time, it downloads that season's play-by-play (about 10 MB). Use **Change game** to switch later.
 3. **Sync once per game.** The All-22 replay has no markers, so the first time through, press **S** at the snap of each play's sideline view. The box at the bottom tells you which play is next. Press **X** if that play isn't in the replay, **Z** to undo. Watching at 2x is fine. Your sync is saved, so you only do this once per game.
 4. After that, the overlay follows along, the end zone view is skipped, and every play in the list is clickable.
 
 The end of the sideline view is estimated as the midpoint between two snaps, since both angles show the same play. If one is off, press **E** at the moment the sideline view ends. Shift-click a play in the list to move its start to the current time.
+
+Drag the panel by its title bar and the score banner anywhere on the video. Double-click either one to put it back.
 
 ## Broadcast audio
 
