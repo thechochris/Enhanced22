@@ -20,13 +20,13 @@ The extension only reads the player's position and seeks it, like you would with
 
 1. Open the game's All-22 replay on NFL+. The Enhanced22 panel appears on the video.
 2. The game is picked automatically from the NFL+ page address. If it can't tell, pick it in the panel. The first time, it downloads that season's play-by-play (about 10 MB). Use **Change game** to switch later.
-3. **Auto-sync (recommended).** Start the replay, then click **Auto-sync game** in the panel. It fast-forwards through the replay once with the sound off (a few minutes for a full game), finds the camera cuts, tells the sideline angle from the end zone angle, and matches each sideline clip to its play using the play's real length from the play-by-play. Only tiny thumbnails are analyzed, in memory, on your computer. Shift-click any play that landed in the wrong spot to move it to the current time. You can stop the scan at any point: the plays found so far are kept, and the button changes to **Resume auto-sync** to pick up where it stopped. Plays you placed by hand are never overwritten.
+3. **Auto-sync (recommended).** Start the replay, then click **Auto-sync game** in the panel. It fast-forwards through the replay once with the sound off (a few minutes for a full game), finds the camera cuts, tells the sideline angle from the end zone angle, and matches each sideline clip to its play using the play's real length from the play-by-play. Only tiny thumbnails are analyzed, in memory, on your computer. If a play landed in the wrong spot, go to where it really starts and shift-click it in the list. The extension then re-matches every other play around your fix, without rescanning. **Export sync data** saves the scan to a file you can send for tuning. You can stop the scan at any point: the plays found so far are kept, and the button changes to **Resume auto-sync** to pick up where it stopped. Plays you placed by hand are never overwritten.
 4. **Or sync by hand.** The All-22 replay has no markers, so the first time through, press **S** at the snap of each play's sideline view. The box at the bottom tells you which play is next. Press **X** if that play isn't in the replay, **Z** to undo. Watching at 2x is fine. Your sync is saved, so you only do this once per game.
 5. After that, the overlay follows along and every play in the list is clickable.
 
 The end of the sideline view is estimated as the midpoint between two snaps, since both angles show the same play. If one is off, press **E** at the moment the sideline view ends. Shift-click a play in the list to move its start to the current time.
 
-Drag the panel by its title bar and the score banner anywhere on the video. Double-click either one to put it back.
+Drag the panel by its title bar (resize it from the grip in its bottom-right corner) and the score banner anywhere on the video. Double-click either one to put it back.
 
 ## Broadcast audio
 

@@ -187,14 +187,20 @@ var E22Auto = (function () {
 
   // Needleman-Wunsch style alignment of film clips to play-by-play rows.
   // With openEnd (a scan that stopped partway), plays after the last clip cost nothing to skip.
-  function align(clips, plays, { openEnd = false } = {}) {
+  // fixed: { playIndex: seconds } from plays you placed by hand; they pin the alignment.
+  function align(clips, plays, { openEnd = false, fixed = {} } = {}) {
     const n = clips.length, m = plays.length;
     const durs = plays.map(playDuration);
     const known = durs.filter((d) => d != null);
     const pad = median(clips.map((c) => c.dur)) - median(known.length ? known : [5]);
     const SKIP_CLIP = 2.0;
     const skipPlay = plays.map((p) => (p.type === 'no_play' && PRE_SNAP.test(p.desc || '') ? 0.1 : 1.2));
+    const fixedAt = Object.entries(fixed).map(([j, t]) => [Number(j), t]);
+    for (const [j] of fixedAt) if (j < skipPlay.length) skipPlay[j] = 10;
+    const NEAR_FIX = 4;
     const matchCost = (i, j) => {
+      if (j in fixed) return Math.abs(clips[i].s - fixed[j]) < NEAR_FIX ? -10 : 10;
+      if (fixedAt.some(([, t]) => Math.abs(clips[i].s - t) < NEAR_FIX)) return 10;
       const d = durs[j];
       const base = d == null ? 0.6 : Math.min(2, Math.abs(clips[i].dur - (d + pad)) / 4);
       const pre = plays[j].type === 'no_play' && PRE_SNAP.test(plays[j].desc || '') ? 0.8 : 0;
@@ -232,12 +238,12 @@ var E22Auto = (function () {
   // Full pipeline: frames + plays -> marks { playId: { s, e, auto } | { skip, auto } } and a summary.
   // partial: the scan covered only the start of the video, so plays past the last clip found
   // are left unsynced instead of being marked missing.
-  function build(frames, plays, { partial = false } = {}) {
+  function build(frames, plays, { partial = false, fixed = {} } = {}) {
     const shots = labelShots(findShots(frames));
     let clips = clipsFrom(shots);
     // In a partial scan the last sideline clip may be cut off; drop it so it is redone on resume.
     if (partial && clips.length && shots.length && shots[shots.length - 1].label === 'S') clips = clips.slice(0, -1);
-    const { matches, pad, lastPlay } = align(clips, plays, { openEnd: partial });
+    const { matches, pad, lastPlay } = align(clips, plays, { openEnd: partial, fixed });
     const marks = {};
     plays.forEach((p, j) => {
       if (partial && j > lastPlay) return;
@@ -247,6 +253,10 @@ var E22Auto = (function () {
     const alternating = shots.slice(1).filter((x, k) => x.label !== shots[k].label).length / Math.max(1, shots.length - 1);
     return {
       marks,
+      detail: {
+        shots: shots.map((x) => ({ s: +x.s.toFixed(2), e: +x.e.toFixed(2), label: x.label, horiz: +x.horiz.toFixed(3) })),
+        matches: [...matches].map(([j, c]) => [plays[j].id, c]),
+      },
       summary: { shots: shots.length, clips: clips.length, matched: matches.size, plays: plays.length, pad, alternating },
     };
   }

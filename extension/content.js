@@ -352,6 +352,8 @@
       color: #fff; padding: 6px 12px; border-radius: 6px; font-size: 13px; opacity: 0; transition: opacity .2s; }
     .toast.show { opacity: 1; }
     .audio:not(.hidden) ~ .toast { top: 60px; }
+    .resize { position: absolute; right: 0; bottom: 0; width: 18px; height: 18px; cursor: nwse-resize; z-index: 2;
+      background: linear-gradient(135deg, transparent 50%, #9aa6bd 50%, #9aa6bd 58%, transparent 58%, transparent 70%, #9aa6bd 70%, #9aa6bd 78%, transparent 78%); }
     .panel { position: absolute; top: 12px; right: 12px; bottom: 56px; width: 290px; pointer-events: auto;
       background: rgba(10,14,22,.88); color: #fff; border-radius: 8px; display: flex; flex-direction: column;
       overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,.4); }
@@ -427,10 +429,12 @@
               <button data-act="prev">◀ Prev (P)</button>
               <button data-act="next">Next (N) ▶</button>
               <button data-act="reset" title="Clear every synced play for this game">Reset sync</button>
+ <button data-act="export" title="Save the auto-sync scan to a file you can send to the developer">Export sync data</button>
               <button data-act="diag" title="Copy technical details about this player to send to the developer">Copy diagnostics</button>
             </div>
             <div class="status"></div></header>
           <div class="list"></div>
+          <div class="resize" title="Drag to resize · double-click to reset"></div>
         </div>
       </div>`;
     for (const k of ['bug', 'sync', 'toast', 'panel', 'list', 'audio']) el[k] = root.querySelector(`.${k}`);
@@ -445,6 +449,7 @@
     el.status = root.querySelector('header .status');
     root.querySelector('header .change').addEventListener('click', () => { state.picking = true; renderList(); });
     makeDraggable(el.panel, root.querySelector('.panel header'), 'panelPos');
+    watchPanelSize();
     makeDraggable(el.bug, el.bug, 'bugPos');
     el.controls = root.querySelector('header .controls');
     el.autosync = root.querySelector('header .autosync');
@@ -470,6 +475,7 @@
       const b = ev.target.closest('button[data-act]');
       if (!b || !state.video) return;
       if (b.dataset.act === 'diag') { copyDiagnostics(); b.blur(); return; }
+      if (b.dataset.act === 'export') { exportSyncData(); b.blur(); return; }
       if (state.scanning) return toast('Auto-sync is running. Click Stop first.');
       if (!state.game) return toast('Pick the game from the list below first');
       ACTIONS[b.dataset.act]();
@@ -487,7 +493,9 @@
         state.marks[p.id] = { s: state.video.currentTime };
         if (!state.history.includes(p.id)) state.history.push(p.id);
         saveMarks();
-        toast('Moved this play\'s start to the current time');
+        realignFromScan().then((ok) => toast(ok
+          ? 'Moved this play here and re-matched the plays around it'
+          : 'Moved this play\'s start to the current time'));
         return;
       }
       if (!hasStart(i)) {
@@ -721,7 +729,43 @@
         node.style.left = node.style.top = node.style.right = node.style.bottom = '';
       }
     }
-    el.panel.style.height = state.prefs.panelPos ? '75%' : '';
+    const size = state.prefs.panelSize;
+    el.panel.style.width = size ? `${size.w}px` : '';
+    el.panel.style.height = size ? `${size.h}px` : state.prefs.panelPos ? '75%' : '';
+  }
+
+  // Resize the panel by dragging its bottom-right grip (double-click the grip to reset).
+  function watchPanelSize() {
+    const grip = root.querySelector('.resize');
+    grip.addEventListener('pointerdown', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      grip.setPointerCapture(ev.pointerId);
+      const r = el.panel.getBoundingClientRect();
+      const wrap = root.querySelector('.wrap').getBoundingClientRect();
+      if (!state.prefs.panelPos) { // pin the top-left corner so the grip follows the mouse
+        state.prefs.panelPos = { x: (r.left - wrap.left) / wrap.width, y: (r.top - wrap.top) / wrap.height };
+      }
+      const move = (e) => {
+        const w = Math.min(Math.max(220, r.width + e.clientX - ev.clientX), wrap.width * 0.95);
+        const h = Math.min(Math.max(200, r.height + e.clientY - ev.clientY), wrap.height * 0.95);
+        state.prefs.panelSize = { w: Math.round(w), h: Math.round(h) };
+        applyPositions();
+      };
+      const up = () => {
+        grip.removeEventListener('pointermove', move);
+        grip.removeEventListener('pointerup', up);
+        savePrefs();
+      };
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
+    });
+    grip.addEventListener('dblclick', (ev) => {
+      ev.stopPropagation();
+      delete state.prefs.panelSize;
+      savePrefs();
+      applyPositions();
+    });
   }
 
   let highlighted = null;
@@ -855,6 +899,55 @@
     el.autosync.textContent = label;
   }
 
+  // After you fix a play by hand, redo the matching from the saved scan with your fixes pinned,
+  // so one correction also repairs the plays after it. No rescan needed.
+  async function realignFromScan() {
+    if (!state.game) return false;
+    const saved = (await storeGet(scanKey()))[scanKey()];
+    if (!saved?.frames?.length) return false;
+    const fixed = {};
+    state.plays.forEach((p, j) => {
+      const m = state.marks[p.id];
+      if (m && !m.auto && typeof m.s === 'number') fixed[j] = m.s;
+    });
+    const { marks, summary, detail } = E22Auto.build(saved.frames, state.plays, { partial: !saved.complete, fixed });
+    const manual = Object.fromEntries(Object.entries(state.marks).filter(([, m]) => !m.auto));
+    state.marks = { ...marks, ...manual };
+    state.lastAutoSummary = { ...summary, complete: saved.complete, upTo: saved.upTo };
+    state.lastAutoDetail = detail;
+    saveMarks();
+    return true;
+  }
+
+  async function exportSyncData() {
+    if (!state.game) return toast('Pick the game first');
+    const saved = (await storeGet(scanKey()))[scanKey()];
+    if (!saved?.frames?.length) return toast('Run Auto-sync first, then export.');
+    const fixed = {};
+    state.plays.forEach((p, j) => { const m = state.marks[p.id]; if (m && !m.auto && typeof m.s === 'number') fixed[j] = m.s; });
+    const { summary, detail } = E22Auto.build(saved.frames, state.plays, { partial: !saved.complete, fixed });
+    const data = {
+      version: chrome.runtime.getManifest().version,
+      game: state.game.gameId,
+      duration: saved.duration,
+      complete: saved.complete,
+      summary,
+      shots: detail.shots,
+      matches: detail.matches,
+      handPlaced: Object.entries(state.marks).filter(([, m]) => !m.auto).map(([id, m]) => ({ id, ...m })),
+      frames: saved.frames.map((f) => [f.t, f.diff, f.horiz, f.luma]),
+    };
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `enhanced22-sync-${state.game.gameId}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast('Saved the sync data file to your Downloads folder');
+  }
+
   async function runAutoSync() {
     const v = state.video;
     if (!v || !state.game) return toast('Pick the game first');
@@ -889,7 +982,9 @@
       const complete = !state.stopScan && upTo >= v.duration - 2;
       await storeSet({ [key]: { frames, upTo, duration: v.duration, complete } });
 
-      const { marks, summary } = E22Auto.build(frames, state.plays, { partial: !complete });
+      const fixed = {};
+      state.plays.forEach((p, j) => { const m = state.marks[p.id]; if (m && !m.auto && typeof m.s === 'number') fixed[j] = m.s; });
+      const { marks, summary } = E22Auto.build(frames, state.plays, { partial: !complete, fixed });
       console.info('[Enhanced22] auto-sync', summary);
       // Plays you placed by hand (S or shift-click) win over automatic ones.
       const manual = Object.fromEntries(Object.entries(state.marks).filter(([, m]) => !m.auto));

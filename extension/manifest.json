@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Enhanced22",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Adds a game-situation overlay and a play-by-play jump list to NFL+ All-22 replays.",
   "permissions": ["storage", "unlimitedStorage"],
   "host_permissions": [
