@@ -58,7 +58,7 @@ var E22Auto = (function () {
   // ---------- scanning ----------
   // Plays the video fast and muted, sampling every displayed frame. Resolves with frames
   // [{ t, diff, horiz, luma }]. Restores the player's state afterwards.
-  async function scan(video, { onProgress, shouldStop, rate = 16, startAt = 0 } = {}) {
+  async function scan(video, { onProgress, shouldStop, rate = 8, startAt = 0 } = {}) {
     const canvas = document.createElement('canvas');
     canvas.width = W; canvas.height = H;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -146,7 +146,66 @@ var E22Auto = (function () {
     return shots.filter((x) => !x.dark);
   }
 
-  // Label shots sideline ('S') or end zone ('E'). Primary signal: line orientation relative
+  // Primary method (tuned on real All-22 footage): every frame is classified sideline or end
+  // zone by its line orientation, which separates cleanly into two clusters. Shots are runs of
+  // the same class. This doesn't depend on catching the cut itself, which fast playback often
+  // skips over.
+  function segmentByAngle(frames, { minRun = 1.5 } = {}) {
+    const hs = frames.filter((f) => f.luma >= 0.05).map((f) => f.horiz).sort((a, b) => a - b);
+    if (hs.length < 20) return null;
+    let lo = hs[Math.floor(hs.length * 0.2)];
+    let hi = hs[Math.floor(hs.length * 0.8)];
+    for (let it = 0; it < 15; it++) {
+      const thr = (lo + hi) / 2;
+      const a = hs.filter((h) => h < thr), b = hs.filter((h) => h >= thr);
+      if (!a.length || !b.length) break;
+      lo = a.reduce((x, y) => x + y, 0) / a.length;
+      hi = b.reduce((x, y) => x + y, 0) / b.length;
+    }
+    if (hi - lo < 0.08) return null; // no clear two-angle structure
+    const thr = (lo + hi) / 2;
+    const margin = (hi - lo) * 0.15;
+
+    let cur = frames[0].horiz >= thr ? 'E' : 'S';
+    let runs = [];
+    for (let k = 0; k < frames.length; k++) {
+      const f = frames[k];
+      if (f.luma >= 0.05) {
+        if (cur === 'S' && f.horiz > thr + margin) cur = 'E';
+        else if (cur === 'E' && f.horiz < thr - margin) cur = 'S';
+      }
+      const last = runs[runs.length - 1];
+      if (last && last.label === cur) { last.j = k; continue; }
+      runs.push({ label: cur, i: k, j: k });
+    }
+    // Boundary between frame k-1 and k: the middle of any gap the fast scan jumped over.
+    const startOf = (r) => (r.i === 0 ? frames[0].t : (frames[r.i - 1].t + frames[r.i].t) / 2);
+    const endOf = (r, next) => (next ? startOf(next) : frames[r.j].t);
+    const span = (k) => endOf(runs[k], runs[k + 1]) - startOf(runs[k]);
+    // Absorb flickers shorter than minRun into their neighbors.
+    for (;;) {
+      let worst = -1;
+      for (let k = 0; k < runs.length; k++) if (span(k) < minRun && (worst < 0 || span(k) < span(worst))) worst = k;
+      if (worst < 0 || runs.length < 2) break;
+      const r = runs[worst];
+      if (worst > 0) runs[worst - 1].j = r.j; else runs[1].i = r.i;
+      runs.splice(worst, 1);
+      // merge neighbors that now share a label
+      const merged = [];
+      for (const x of runs) {
+        const last = merged[merged.length - 1];
+        if (last && last.label === x.label) last.j = x.j; else merged.push({ ...x });
+      }
+      runs = merged;
+    }
+    return runs.map((r, k) => {
+      const sT = startOf(r), eT = endOf(r, runs[k + 1]);
+      const inRun = frames.slice(r.i, r.j + 1).map((f) => f.horiz);
+      return { s: sT, e: eT, dur: eT - sT, horiz: median(inRun), label: r.label, dark: false };
+    });
+  }
+
+  // Fallback: label cut-based shots sideline ('S') or end zone ('E'). Primary signal: line orientation relative
   // to the game's own median. Where that is ambiguous, fall back to alternation.
   function labelShots(shots) {
     if (!shots.length) return [];
@@ -239,7 +298,7 @@ var E22Auto = (function () {
   // partial: the scan covered only the start of the video, so plays past the last clip found
   // are left unsynced instead of being marked missing.
   function build(frames, plays, { partial = false, fixed = {} } = {}) {
-    const shots = labelShots(findShots(frames));
+    const shots = segmentByAngle(frames) || labelShots(findShots(frames));
     let clips = clipsFrom(shots);
     // In a partial scan the last sideline clip may be cut off; drop it so it is redone on resume.
     if (partial && clips.length && shots.length && shots[shots.length - 1].label === 'S') clips = clips.slice(0, -1);
@@ -261,6 +320,6 @@ var E22Auto = (function () {
     };
   }
 
-  return { W, H, features, gridDiff, scan, findShots, labelShots, clipsFrom, align, build };
+  return { W, H, features, gridDiff, scan, segmentByAngle, findShots, labelShots, clipsFrom, align, build };
 })();
 if (typeof module !== 'undefined') module.exports = E22Auto;
