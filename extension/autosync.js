@@ -286,6 +286,10 @@ var E22Auto = (function () {
   // Seconds from the start of the sideline view to the snap: 0.35-0.45 s on clean scans
   // checked against snaps placed by hand.
   const SNAP_LEAD = 0.4;
+  // Median frame difference over a clip's first second above which it opened mid-motion.
+  // Real sideline views mostly measure 0.0001-0.0012, flips inside replays 0.0007-0.0038;
+  // short clips (under 4 s) use half the threshold.
+  const MOVING = 0.0015;
 
   function playDuration(p) {
     return p.snapAt && p.endAt && p.endAt > p.snapAt ? (p.endAt - p.snapAt) / 1000 : null;
@@ -316,7 +320,8 @@ var E22Auto = (function () {
       const d = durs[j];
       const base = d == null ? 0.4 : Math.min(1.2, Math.abs(dur - (d + pad)) / 8);
       const pre = isPreSnap(plays[j]) ? 0.8 : 0;
-      return base + pre;
+      // Kickoffs open with the kicking team already running, so only other plays need a still start.
+      return base + pre + (clips[i].moving && plays[j].type !== 'kickoff' ? 0.5 : 0);
     };
     const D = Array.from({ length: n + 1 }, () => new Float64Array(m + 1));
     const B = Array.from({ length: n + 1 }, () => new Uint8Array(m + 1)); // 1 match, 2 skip clip, 3 skip play, 4 kick over two clips
@@ -378,6 +383,19 @@ var E22Auto = (function () {
   function build(frames, plays, { partial = false, fixed = {} } = {}) {
     const shots = segmentByAngle(frames) || labelShots(findShots(frames));
     let clips = clipsFrom(shots);
+    // A real sideline view opens on the teams lining up, so its first second is nearly still.
+    // Clips that open mid-motion are camera flips inside a replay, not a new play.
+    {
+      let k = 0;
+      for (const c of clips) {
+        while (k < frames.length && frames[k].t < c.s + 0.15) k++;
+        const ds = [];
+        for (let j = k; j < frames.length && frames[j].t < c.s + 1.4; j++) ds.push(frames[j].diff);
+        c.moving = ds.length >= 3 && median(ds) > (c.dur < 4 ? MOVING / 2 : MOVING);
+      }
+      // If most clips look like that, the film isn't a still sideline camera; don't use it.
+      if (clips.filter((c) => c.moving).length > clips.length / 3) for (const c of clips) c.moving = false;
+    }
     // In a partial scan the last sideline clip may be cut off; drop it so it is redone on resume.
     if (partial && clips.length && shots.length && shots[shots.length - 1].label === 'S') clips = clips.slice(0, -1);
     const { matches, extended, pad, lastPlay } = align(clips, plays, { openEnd: partial, fixed });

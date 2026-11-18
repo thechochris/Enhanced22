@@ -328,7 +328,11 @@
       const list = [];
       for (let k = 1; k < snaps.length; k++) {
         const gap = snaps[k] - snaps[k - 1];
-        if (gap > BREAK_GAP) list.push({ at: snaps[k], cut: gap - AFTER_BREAK });
+        if (gap > BREAK_GAP) {
+          // Measured on a full broadcast: ~16 s when the break ends with a kickoff, ~55 s otherwise.
+          const kick = state.plays.find((p) => p.snapAt === snaps[k])?.type === 'kickoff';
+          list.push({ at: snaps[k], cut: gap - (kick ? AFTER_BREAK : 55000) });
+        }
       }
       breakCache = { plays: state.plays, list };
     }

@@ -155,6 +155,29 @@ var E22Bcast = (function () {
         prev = { endB: prev.endB, endW: prev.endW };
       }
     }
+    // Second pass: a stretch left unplaced sits between two placed ones, which pins it into a
+    // narrow window (after the previous stretch, early enough for the next one to fit). Inside
+    // that window two matching snaps are enough.
+    const fits = segs.map((seg, k) => (detail[k].ok ? { o: detail[k].offset, span: (seg[seg.length - 1].snapAt - seg[0].snapAt) / 1000 } : null));
+    for (let k = 0; k < segs.length; k++) {
+      if (fits[k]) continue;
+      const seg = segs[k];
+      let p = k - 1; while (p >= 0 && !fits[p]) p--;
+      let q = k + 1; while (q < segs.length && !fits[q]) q++;
+      if (p < 0 || q >= segs.length) continue;
+      const span = (seg[seg.length - 1].snapAt - seg[0].snapAt) / 1000;
+      const lo = fits[p].o + fits[p].span + 5;
+      const hi = fits[q].o - span - 5;
+      if (hi < lo) continue;
+      const fit = fitSegment(seg, cands, lo, hi);
+      if (fit && fit.matched >= Math.min(2, seg.length) && fit.matched >= Math.ceil(seg.length * 0.3)) {
+        fits[k] = { o: fit.o, span };
+        anchors.push({ w: seg[0].snapAt, b: +fit.o.toFixed(3), auto: true });
+        found += fit.matched;
+        Object.assign(detail[k], { matched: fit.matched, offset: +fit.o.toFixed(2), ok: true, narrow: true });
+      }
+    }
+    anchors.sort((x, y) => x.w - y.w);
     return {
       anchors,
       summary: { candidates: cands.length, segments: segs.length, placed: anchors.length, playsMatched: found, plays: segs.reduce((n, s) => n + s.length, 0) },
