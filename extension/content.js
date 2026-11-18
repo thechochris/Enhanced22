@@ -421,6 +421,7 @@
               <button data-act="prev">◀ Prev (P)</button>
               <button data-act="next">Next (N) ▶</button>
               <button data-act="reset" title="Clear every synced play for this game">Reset sync</button>
+              <button data-act="diag" title="Copy technical details about this player to send to the developer">Copy diagnostics</button>
             </div>
             <div class="status"></div></header>
           <div class="list"></div>
@@ -455,6 +456,7 @@
     el.controls.addEventListener('click', (ev) => {
       const b = ev.target.closest('button[data-act]');
       if (!b || !state.video) return;
+      if (b.dataset.act === 'diag') { copyDiagnostics(); b.blur(); return; }
       if (!state.game) return toast('Pick the game from the list below first');
       ACTIONS[b.dataset.act]();
       b.blur();
@@ -817,11 +819,103 @@
     return best;
   }
 
+  // ---------- diagnostics ----------
+  // Collects what the player exposes besides pixels (sources, clip changes, text tracks, the
+  // streaming manifest's markers) so we can tell which signal could find plays automatically.
+  // Query strings are stripped so no sign-in tokens end up in the report.
+  const mediaEvents = [];
+  function logMediaEvent(v, type) {
+    mediaEvents.push({
+      at: new Date().toISOString().slice(11, 19), type,
+      src: stripUrl(v.currentSrc), duration: Number.isFinite(v.duration) ? +v.duration.toFixed(2) : String(v.duration),
+      t: +v.currentTime.toFixed(2),
+    });
+    if (mediaEvents.length > 40) mediaEvents.shift();
+  }
+  function stripUrl(u) {
+    if (!u) return '';
+    if (u.startsWith('blob:')) return 'blob:(media source)';
+    try { const x = new URL(u, location.href); return x.origin + x.pathname; } catch { return String(u).split('?')[0]; }
+  }
+  function summarizeManifest(text) {
+    const count = (re) => (text.match(re) || []).length;
+    const sample = (re) => (text.match(re) || []).slice(0, 6).map((l) => l.replace(/https?:\/\/[^\s"',]+/g, '(url)'));
+    return {
+      bytes: text.length,
+      kind: text.startsWith('#EXTM3U') ? 'HLS' : /<MPD/i.test(text) ? 'DASH' : 'other',
+      variants: count(/#EXT-X-STREAM-INF/g),
+      segments: count(/#EXTINF/g),
+      discontinuities: count(/#EXT-X-DISCONTINUITY\b/g),
+      dateranges: count(/#EXT-X-DATERANGE/g),
+      programDateTimes: count(/#EXT-X-PROGRAM-DATE-TIME/g),
+      cues: count(/#EXT-X-CUE|#EXT-OATCLS|#EXT-X-SCTE/g),
+      periods: count(/<Period\b/g),
+      eventStreams: count(/<EventStream\b/g),
+      samples: [
+        ...sample(/#EXT-X-DATERANGE[^\n]*/g), ...sample(/#EXT-X-CUE[^\n]*/g),
+        ...sample(/<Period\b[^>]*>/g), ...sample(/<Event\b[^>]*>/g),
+        ...sample(/#EXT-X-PROGRAM-DATE-TIME[^\n]*/g).slice(0, 2),
+      ],
+    };
+  }
+  async function fetchText(u) {
+    try { const r = await fetch(u, { credentials: 'include' }); return r.ok ? await r.text() : `HTTP ${r.status}`; }
+    catch (e) { return `fetch failed: ${e.message}`; }
+  }
+  async function copyDiagnostics() {
+    toast('Collecting diagnostics…');
+    const vids = [...document.querySelectorAll('video')].map((v) => ({
+      src: stripUrl(v.currentSrc || v.src),
+      duration: Number.isFinite(v.duration) ? +v.duration.toFixed(2) : String(v.duration),
+      currentTime: +v.currentTime.toFixed(2),
+      size: `${v.clientWidth}x${v.clientHeight}`,
+      paused: v.paused,
+      chosen: v === state.video,
+      encrypted: !!v.mediaKeys,
+      textTracks: [...v.textTracks].map((tt) => ({ kind: tt.kind, label: tt.label, mode: tt.mode, cues: tt.cues ? tt.cues.length : null })),
+    }));
+    const resources = [...new Set(performance.getEntriesByType('resource')
+      .map((e) => e.name)
+      .filter((n) => /m3u8|\.mpd|manifest|\/api\/|graphql|\.json|play|replay|game|video|vod/i.test(n))
+      .filter((n) => !/\.(ts|m4s|mp4|aac|m4a|m4v|jpg|png|webp|gif|svg|woff2?|css|js)(\?|$)/i.test(n)))]
+      .slice(-80);
+    const manifests = [];
+    for (const u of performance.getEntriesByType('resource').map((e) => e.name).filter((n) => /\.m3u8|\.mpd/i.test(n)).slice(-4)) {
+      const text = await fetchText(u);
+      manifests.push({ url: stripUrl(u), ...(text.startsWith('#') || text.startsWith('<') ? summarizeManifest(text) : { error: text.slice(0, 120) }) });
+    }
+    const report = {
+      version: chrome.runtime.getManifest().version,
+      page: stripUrl(location.href),
+      inFrame: window !== window.top,
+      game: state.game?.gameId || null,
+      synced: state.game ? syncedCount() : 0,
+      videos: vids,
+      mediaEvents,
+      manifests,
+      resources: resources.map(stripUrl),
+    };
+    const text = JSON.stringify(report, null, 1);
+    try { await navigator.clipboard.writeText(text); toast('Diagnostics copied. Paste them into the chat.'); }
+    catch {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'width:100%;height:160px;font-size:10px';
+      el.list.prepend(ta);
+      ta.select();
+      toast('Copy the text at the top of the panel (Ctrl+C) and paste it into the chat.');
+    }
+  }
+
   function attach(v) {
     if (state.video === v) return;
     if (state.video) state.video.removeEventListener('seeked', onSeeked);
     state.video = v;
     v.addEventListener('seeked', onSeeked);
+    for (const type of ['loadedmetadata', 'emptied', 'durationchange', 'ended']) {
+      v.addEventListener(type, () => logMediaEvent(v, type));
+    }
+    logMediaEvent(v, 'attached');
     if (!host) { buildUi(); loadActiveGame().then(checkRole); }
     placeHost();
   }
