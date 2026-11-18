@@ -200,7 +200,7 @@
   function tick() {
     const v = state.video;
     if (!v) return;
-    if (!state.game) { renderStatus(v.currentTime, v); return; }
+    if (!state.game || state.scanning) { renderStatus(v.currentTime, v); return; }
     const t = v.currentTime;
     const i = currentIndex(t);
     if (state.prefs.autoSkip && !v.paused && i >= 0 && state.suppressSkipFor !== i &&
@@ -373,6 +373,10 @@
     .panel header .sub { font-weight: 400; color: #9aa6bd; font-size: 12px; margin-top: 2px; }
     .panel .toggles { display: flex; gap: 10px; margin-top: 6px; font-weight: 400; font-size: 12px; color: #cfd6e4; }
     .panel .toggles label { cursor: pointer; display: flex; gap: 4px; align-items: center; }
+    .autosync { display: block; width: 100%; margin-top: 8px; font: inherit; font-size: 12px; font-weight: 700;
+      color: #fff; background: #2f6fed; border: 0; border-radius: 5px; padding: 6px; cursor: pointer; }
+    .autosync:hover { background: #4a82ff; }
+    .autosync.running { background: #b54708; }
     .controls { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
     .controls button { font: inherit; font-size: 11px; font-weight: 600; color: #fff; background: #2a3245;
       border: 1px solid #3a4560; border-radius: 4px; padding: 3px 6px; cursor: pointer; }
@@ -414,6 +418,7 @@
               <label><input type="checkbox" data-pref="overlay"> Overlay</label>
               <label><input type="checkbox" data-pref="broadcastAudio"> Broadcast audio</label>
             </div>
+            <button class="autosync" title="Fast-forwards through the replay once to find every play">Auto-sync game</button>
             <div class="controls">
               <button data-act="mark" title="Press at the snap of the sideline view">Sync play (S)</button>
               <button data-act="skip" title="This play isn't in the replay">Not in replay (X)</button>
@@ -441,6 +446,12 @@
     makeDraggable(el.panel, root.querySelector('.panel header'), 'panelPos');
     makeDraggable(el.bug, el.bug, 'bugPos');
     el.controls = root.querySelector('header .controls');
+    el.autosync = root.querySelector('header .autosync');
+    el.autosync.addEventListener('click', () => {
+      el.autosync.blur();
+      if (state.scanning) { state.stopScan = true; return; }
+      runAutoSync();
+    });
     let resetArmed = 0;
     const ACTIONS = {
       mark: markNext, skip: skipNext, undo, prev: () => jump(-1), next: () => jump(1),
@@ -457,6 +468,7 @@
       const b = ev.target.closest('button[data-act]');
       if (!b || !state.video) return;
       if (b.dataset.act === 'diag') { copyDiagnostics(); b.blur(); return; }
+      if (state.scanning) return toast('Auto-sync is running. Click Stop first.');
       if (!state.game) return toast('Pick the game from the list below first');
       ACTIONS[b.dataset.act]();
       b.blur();
@@ -819,6 +831,45 @@
     return best;
   }
 
+  // ---------- automatic sync ----------
+  async function runAutoSync() {
+    const v = state.video;
+    if (!v || !state.game) return toast('Pick the game first');
+    if (!Number.isFinite(v.duration) || v.duration < 60) return toast('Start the All-22 replay first, then try again.');
+    if (Object.values(state.marks).some((m) => !m.auto) &&
+        !window.confirm('Auto-sync will replace the plays you synced by hand for this game. Continue?')) return;
+    state.scanning = true;
+    state.stopScan = false;
+    el.autosync.classList.add('running');
+    el.autosync.textContent = 'Auto-sync: starting… (click to stop)';
+    const started = performance.now();
+    try {
+      const frames = await E22Auto.scan(v, {
+        shouldStop: () => state.stopScan || dead,
+        onProgress: (f) => {
+          const pct = Math.round(f * 100);
+          const el2 = (performance.now() - started) / 1000;
+          const eta = f > 0.02 ? Math.round((el2 / f - el2) / 60) : null;
+          el.autosync.textContent = `Auto-sync: scanning ${pct}%${eta != null ? ` · about ${eta} min left` : ''} (click to stop)`;
+        },
+      });
+      if (state.stopScan) { toast('Auto-sync stopped. Nothing was changed.'); return; }
+      const { marks, summary } = E22Auto.build(frames, state.plays);
+      console.info('[Enhanced22] auto-sync', summary);
+      state.marks = marks;
+      state.history = [];
+      state.lastAutoSummary = summary;
+      saveMarks();
+      toast(`Auto-sync found ${summary.matched} of ${summary.plays} plays. Shift-click a play in the list to fix one.`);
+    } catch (e) {
+      toast(`Auto-sync failed: ${e.message}`);
+    } finally {
+      state.scanning = false;
+      el.autosync.classList.remove('running');
+      el.autosync.textContent = 'Auto-sync game';
+    }
+  }
+
   // ---------- diagnostics ----------
   // Collects what the player exposes besides pixels (sources, clip changes, text tracks, the
   // streaming manifest's markers) so we can tell which signal could find plays automatically.
@@ -890,6 +941,7 @@
       inFrame: window !== window.top,
       game: state.game?.gameId || null,
       synced: state.game ? syncedCount() : 0,
+      autoSync: state.lastAutoSummary || null,
       videos: vids,
       mediaEvents,
       manifests,
