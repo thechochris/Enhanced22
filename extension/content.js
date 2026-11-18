@@ -936,20 +936,24 @@
   async function exportSyncData() {
     if (!state.game) return toast('Pick the game first');
     const saved = (await storeGet(scanKey()))[scanKey()];
-    if (!saved?.frames?.length) return toast('Run Auto-sync first, then export.');
+    const hasScan = !!saved?.frames?.length;
+    const hand = Object.values(state.marks).filter((m) => !m.auto && typeof m.s === 'number').length;
+    if (!hasScan && !hand) return toast('Nothing to export yet: run Auto-sync or sync a few plays by hand first.');
     const fixed = {};
     state.plays.forEach((p, j) => { const m = state.marks[p.id]; if (m && !m.auto && typeof m.s === 'number') fixed[j] = m.s; });
-    const { summary, detail } = E22Auto.build(saved.frames, state.plays, { partial: !saved.complete, fixed });
+    const { summary, detail } = hasScan
+      ? E22Auto.build(saved.frames, state.plays, { partial: !saved.complete, fixed })
+      : { summary: null, detail: { shots: [], matches: [] } };
     const data = {
       version: chrome.runtime.getManifest().version,
       game: state.game.gameId,
-      duration: saved.duration,
-      complete: saved.complete,
+      duration: hasScan ? saved.duration : state.video?.duration,
+      complete: hasScan ? saved.complete : null,
       summary,
       shots: detail.shots,
       matches: detail.matches,
       handPlaced: Object.entries(state.marks).filter(([, m]) => !m.auto).map(([id, m]) => ({ id, ...m })),
-      frames: saved.frames.map((f) => [f.t, f.diff, f.horiz, f.luma]),
+      frames: hasScan ? saved.frames.map((f) => [f.t, f.diff, f.horiz, f.luma]) : [],
     };
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     const a = document.createElement('a');
