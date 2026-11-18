@@ -298,13 +298,49 @@
     });
   }
 
+  // The full-game replay leaves out the commercial breaks, so the broadcast runs short of the
+  // real clock by the length of every break. Breaks show up in the play-by-play as unusually
+  // long gaps between snaps (about 3 minutes, against 30-60 s normally). Across a break we
+  // assume the broadcast showed a normal gap's worth, which gets the audio within seconds
+  // instead of minutes; an anchor (B) or nudge ([ ]) after the break makes it exact.
+  const BREAK_GAP = 140000;
+  const AFTER_BREAK = 45000;
+  let breakCache = { plays: null, list: [] };
+  function breakList() {
+    if (breakCache.plays !== state.plays) {
+      const snaps = state.plays.map((p) => p.snapAt).filter(Boolean).sort((a, b) => a - b);
+      const list = [];
+      for (let k = 1; k < snaps.length; k++) {
+        const gap = snaps[k] - snaps[k - 1];
+        if (gap > BREAK_GAP) list.push({ at: snaps[k], cut: gap - AFTER_BREAK });
+      }
+      breakCache = { plays: state.plays, list };
+    }
+    return breakCache.list;
+  }
+  // Milliseconds of break cut out between wall-clock moments x < y, and how many breaks.
+  function cutBetween(x, y) {
+    let cut = 0, n = 0;
+    for (const br of breakList()) if (br.at > x + 1000 && br.at <= y + 1500) { cut += br.cut; n++; }
+    return { cut, n };
+  }
+  let lastEstimated = false;
   function broadcastTimeFor(w) {
+    lastEstimated = false;
     if (!state.anchors.length || w == null) return null;
     const sorted = [...state.anchors].sort((a, b) => a.w - b.w);
-    let a = sorted[0];
+    let a = null;
     // A correction point belongs to its play, including the moments just before the snap.
     for (const x of sorted) if (x.w <= w + 1500) a = x;
-    return a.b + (w - a.w) / 1000;
+    if (a) {
+      const { cut, n } = cutBetween(a.w, w);
+      lastEstimated = n > 0;
+      return a.b + (w - a.w - cut) / 1000;
+    }
+    a = sorted[0];
+    const { cut, n } = cutBetween(w, a.w);
+    lastEstimated = n > 0;
+    return a.b - (a.w - w - cut) / 1000;
   }
 
   let lastFollowSeek = 0;
@@ -313,7 +349,7 @@
     const now = performance.now();
     if (now - lastReport < 200) return;
     lastReport = now;
-    send({ type: 'audioStatus', ready });
+    send({ type: 'audioStatus', ready, estimated: lastEstimated });
   }
   let lastFollowTime = -1;
   let lastFollowMove = 0;
@@ -352,6 +388,7 @@
     if (Math.abs(v.currentTime - lastFollowTime) > 0.05) { lastFollowTime = v.currentTime; lastFollowMove = nowMs; }
     const stalled = nowMs - lastFollowMove > 1500;
     followStatus = `${stalled ? 'stalled, retrying' : 'following'} · drift ${(v.currentTime - b).toFixed(1)} s` +
+      (lastEstimated ? ' · timing estimated after a commercial break: press B at a snap to make it exact' : '') +
       (v.readyState < 3 ? ` · loading (state ${v.readyState})` : '') + (document.hidden ? ' · background tab' : '');
     if (stalled && nowMs - lastFollowSeek > 3000) {
       lastFollowSeek = nowMs;
@@ -1293,6 +1330,15 @@
     if (msg?.type === 'audioStatus' && !state.isAudioTab) {
       audioLink.at = performance.now();
       audioLink.ready = !!msg.ready;
+      if (msg.estimated && state.video) {
+        const i = currentIndex(state.video.currentTime);
+        const seg = breakList().filter((br) => br.at <= (state.plays[i]?.snapAt ?? 0) + 1500).length;
+        if (seg !== audioLink.warnedSeg) {
+          audioLink.warnedSeg = seg;
+          toast('Commercial break skipped here, so the audio timing is estimated. ' +
+            'On the broadcast tab, press B at this play\'s snap (or use [ and ] here) to make it exact.', 8000);
+        }
+      }
       if (msg.ready) audioLink.readyAt = audioLink.at;
     }
     if (msg?.type === 'roleChanged') checkRole();
