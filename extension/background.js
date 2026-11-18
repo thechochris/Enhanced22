@@ -167,6 +167,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     })();
     return true;
   }
+  if (msg?.type === 'relayKey') {
+    if (sender.tab?.id != null) chrome.tabs.sendMessage(sender.tab.id, { type: 'key', code: msg.code }).catch(() => {});
+    return false;
+  }
   if (msg?.type === 'audioDrive') {
     audioTabId().then((id) => {
       if (id == null || id === sender.tab?.id) return;

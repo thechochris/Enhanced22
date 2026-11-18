@@ -166,7 +166,8 @@
   // ---------- skipping the end zone view ----------
   function tick() {
     const v = state.video;
-    if (!v || !state.game) return;
+    if (!v) return;
+    if (!state.game) { renderStatus(v.currentTime, v); return; }
     const t = v.currentTime;
     const i = currentIndex(t);
     if (state.prefs.sidelineOnly && !v.paused && i >= 0 && state.suppressSkipFor !== i) {
@@ -175,7 +176,7 @@
         seek(seg.next);
       }
     }
-    if (!state.isAudioTab) renderBug(i);
+    if (!state.isAudioTab) { renderBug(i); renderStatus(t, v); }
     driveAudio(i, t);
   }
 
@@ -296,6 +297,11 @@
     .panel header .sub { font-weight: 400; color: #9aa6bd; font-size: 12px; margin-top: 2px; }
     .panel .toggles { display: flex; gap: 10px; margin-top: 6px; font-weight: 400; font-size: 12px; color: #cfd6e4; }
     .panel .toggles label { cursor: pointer; display: flex; gap: 4px; align-items: center; }
+    .controls { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+    .controls button { font: inherit; font-size: 11px; font-weight: 600; color: #fff; background: #2a3245;
+      border: 1px solid #3a4560; border-radius: 4px; padding: 3px 6px; cursor: pointer; }
+    .controls button:hover { background: #2f6fed; }
+    .status { margin-top: 6px; font-size: 11px; font-weight: 400; color: #9aa6bd; }
     .list { overflow-y: auto; flex: 1; font-size: 12px; }
     .qh { position: sticky; top: 0; background: #1b2232; color: #9aa6bd; padding: 3px 10px; font-weight: 600; }
     .row { display: grid; grid-template-columns: 62px 38px 1fr; gap: 6px; padding: 5px 10px; cursor: pointer;
@@ -330,7 +336,15 @@
               <label><input type="checkbox" data-pref="sidelineOnly"> Sideline view only</label>
               <label><input type="checkbox" data-pref="overlay"> Overlay</label>
               <label><input type="checkbox" data-pref="broadcastAudio"> Broadcast audio</label>
-            </div></header>
+            </div>
+            <div class="controls">
+              <button data-act="mark" title="Press at the snap of the sideline view">Sync play (S)</button>
+              <button data-act="skip" title="This play isn't in the replay">Not in replay (X)</button>
+              <button data-act="undo">Undo (Z)</button>
+              <button data-act="prev">◀ Prev (P)</button>
+              <button data-act="next">Next (N) ▶</button>
+            </div>
+            <div class="status"></div></header>
           <div class="list"></div>
         </div>
       </div>`;
@@ -343,6 +357,16 @@
     el.badge = root.querySelector('.badge');
     el.title = root.querySelector('header .title');
     el.sub = root.querySelector('header .sub');
+    el.status = root.querySelector('header .status');
+    el.controls = root.querySelector('header .controls');
+    const ACTIONS = { mark: markNext, skip: skipNext, undo, prev: () => jump(-1), next: () => jump(1) };
+    el.controls.addEventListener('click', (ev) => {
+      const b = ev.target.closest('button[data-act]');
+      if (!b || !state.video) return;
+      if (!state.game) return toast('Pick this game in the Enhanced22 toolbar button first');
+      ACTIONS[b.dataset.act]();
+      b.blur();
+    });
     root.querySelectorAll('input[data-pref]').forEach((cb) => {
       cb.addEventListener('change', () => { state.prefs[cb.dataset.pref] = cb.checked; savePrefs(); render(); });
     });
@@ -480,6 +504,17 @@
     }
   }
 
+  let lastStatus = '';
+  function renderStatus(t, v) {
+    const fmt = (x) => {
+      if (!Number.isFinite(x)) return '--:--';
+      const h = Math.floor(x / 3600), m = Math.floor((x % 3600) / 60), sec = Math.floor(x % 60);
+      return `${h ? `${h}:` : ''}${String(m).padStart(h ? 2 : 1, '0')}:${String(sec).padStart(2, '0')}`;
+    };
+    const txt = `Video ${fmt(t)} / ${fmt(v.duration)} · ${v.paused ? 'paused' : 'playing'}`;
+    if (txt !== lastStatus) { lastStatus = txt; el.status.textContent = txt; }
+  }
+
   function render() {
     if (!root) return;
     if (state.isAudioTab) {
@@ -510,26 +545,42 @@
     },
   };
   const AUDIO_KEYS = { KeyB: addAnchor, KeyU: removeLastAnchor };
+  function handleKey(code) {
+    if (!state.video || !state.game) return false;
+    const fn = (state.isAudioTab ? AUDIO_KEYS : KEYS)[code];
+    if (!fn) return false;
+    fn();
+    return true;
+  }
   window.addEventListener('keydown', (ev) => {
-    if (!state.video || !state.game) return;
-    if (ev.ctrlKey || ev.altKey || ev.metaKey || ev.shiftKey) return;
+    if (ev.ctrlKey || ev.altKey || ev.metaKey || ev.shiftKey || ev.repeat) return;
     const tgt = ev.composedPath()[0];
     if (tgt && (tgt.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(tgt.tagName || ''))) return;
-    const fn = (state.isAudioTab ? AUDIO_KEYS : KEYS)[ev.code];
-    if (!fn) return;
-    ev.preventDefault();
-    ev.stopImmediatePropagation();
-    fn();
+    if (!KEYS[ev.code] && !AUDIO_KEYS[ev.code]) return;
+    if (state.video && state.game) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      handleKey(ev.code);
+    } else if (!state.video) {
+      // The video lives in another frame of this page (or the player has focus there); pass it on.
+      chrome.runtime.sendMessage({ type: 'relayKey', code: ev.code }).catch(() => {});
+    }
   }, true);
 
   // ---------- find the replay video ----------
+  // Players often keep several <video> elements (ads, previews, the real stream).
+  // Prefer the big one that is actually playing a long video.
   function findVideo() {
     let best = null;
-    let bestArea = 0;
+    let bestScore = 0;
     document.querySelectorAll('video').forEach((v) => {
       const r = v.getBoundingClientRect();
-      const area = r.width * r.height;
-      if (r.width >= 320 && area > bestArea) { best = v; bestArea = area; }
+      if (r.width < 320 || r.height < 180) return;
+      let score = r.width * r.height;
+      if (v.readyState > 0) score *= 2;
+      if (!v.paused) score *= 2;
+      if (Number.isFinite(v.duration) && v.duration > 600) score *= 4;
+      if (score > bestScore) { best = v; bestScore = score; }
     });
     return best;
   }
@@ -555,6 +606,7 @@
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg?.type === 'audioDrive' && state.isAudioTab) followAudio(msg);
     if (msg?.type === 'roleChanged') checkRole();
+    if (msg?.type === 'key' && state.video) handleKey(msg.code);
   });
 
   setInterval(() => {
