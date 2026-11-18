@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Enhanced22",
+  "version": "0.1.0",
+  "description": "Adds a game-situation overlay and a play-by-play jump list to NFL+ All-22 replays.",
+  "permissions": ["storage", "unlimitedStorage"],
+  "host_permissions": [
+    "https://github.com/nflverse/*",
+    "https://objects.githubusercontent.com/*",
+    "https://release-assets.githubusercontent.com/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Enhanced22" },
+  "content_scripts": [
+    {
+      "matches": ["https://*.nfl.com/*"],
+      "js": ["format.js", "content.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ]
+}
