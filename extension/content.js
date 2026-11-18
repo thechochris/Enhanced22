@@ -393,7 +393,7 @@
     const d = state.lastDrive;
     const p = d && d.playIndex >= 0 ? state.plays[d.playIndex] : null;
     el.audio.classList.remove('hidden');
-    el.audio.textContent =
+    el.atext.textContent =
       `Broadcast audio source · ${state.anchors.length} anchor${state.anchors.length === 1 ? '' : 's'}` +
       (p ? ` · Press B at the snap of ${E22.quarter(p.qtr)} ${E22.clock(p.time)} ${E22.typeLabel(p)}` +
         `${p.pos ? ` (${p.pos})` : ''}` : '') +
@@ -450,6 +450,7 @@
       border-radius: 8px; padding: 8px 12px; font-size: 13px; max-width: 60%; border-left: 3px solid #ffd34d; }
     .sync b { color: #ffd34d; }
     .sync .keys { color: #9aa6bd; margin-top: 3px; font-size: 12px; }
+    .audio { pointer-events: auto; }
     .audio { position: absolute; left: 12px; top: 12px; right: 12px; background: rgba(10,14,22,.85); color: #fff;
       border-radius: 8px; padding: 8px 12px; font-size: 13px; border-left: 3px solid #3ddc84; }
     .toast { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); background: rgba(0,0,0,.85);
@@ -480,6 +481,11 @@
     .panel header .sub { font-weight: 400; color: #9aa6bd; font-size: 12px; margin-top: 2px; }
     .panel .toggles { display: flex; gap: 10px; margin-top: 6px; font-weight: 400; font-size: 12px; color: #cfd6e4; }
     .panel .toggles label { cursor: pointer; display: flex; gap: 4px; align-items: center; }
+    .audiosrc { display: block; width: 100%; margin-top: 6px; font: inherit; font-size: 11px; font-weight: 600;
+      color: #fff; background: #1c7c4a; border: 0; border-radius: 5px; padding: 4px; cursor: pointer; }
+    .audiosrc:hover { background: #239b5c; }
+    .audio button { margin-left: 10px; font: inherit; font-size: 11px; font-weight: 600; color: #fff;
+      background: #2a3245; border: 1px solid #3a4560; border-radius: 4px; padding: 2px 8px; cursor: pointer; }
     .autosync { display: block; width: 100%; margin-top: 8px; font: inherit; font-size: 12px; font-weight: 700;
       color: #fff; background: #2f6fed; border: 0; border-radius: 5px; padding: 6px; cursor: pointer; }
     .autosync:hover { background: #4a82ff; }
@@ -515,11 +521,12 @@
         <div class="bug hidden"><div class="l1"><span class="clock"></span><span class="dd"></span><span class="yl"></span></div>
           <div class="l2"><span class="poss"></span><span class="score"></span><span class="badge"></span></div></div>
         <div class="sync hidden"></div>
-        <div class="audio hidden"></div>
+        <div class="audio hidden"><span class="atext"></span><button class="astop">Stop using this tab for audio</button></div>
         <div class="toast"></div>
         <div class="panel">
           <header><div class="titlebar"><span class="grip" title="Drag to move">⠿</span><div class="title">Enhanced22</div>
               <button class="change" title="Choose a different game">Change game</button></div><div class="sub"></div>
+            <button class="audiosrc" title="Use this tab as the broadcast audio source">Use this tab for broadcast audio</button>
             <div class="toggles">
               <label><input type="checkbox" data-pref="autoSkip"> Auto-skip end zone view</label>
               <label><input type="checkbox" data-pref="overlay"> Overlay</label>
@@ -557,6 +564,16 @@
     makeDraggable(el.bug, el.bug, 'bugPos');
     el.controls = root.querySelector('header .controls');
     el.autosync = root.querySelector('header .autosync');
+    el.atext = root.querySelector('.audio .atext');
+    root.querySelector('.audio .astop').addEventListener('click', async () => {
+      await send({ type: 'setAudioTabSelf', on: false });
+      if (state.video && !state.video.paused) state.video.pause();
+    });
+    root.querySelector('header .audiosrc').addEventListener('click', async (ev) => {
+      ev.currentTarget.blur();
+      await send({ type: 'setAudioTabSelf', on: true });
+      toast('This tab is now the broadcast audio source. Press B at a snap to line it up.');
+    });
     el.autosync.addEventListener('click', () => {
       el.autosync.blur();
       if (state.scanning) { state.stopScan = true; return; }
@@ -806,8 +823,10 @@
       const dy = ev.clientY - start.top;
       handle.setPointerCapture(ev.pointerId);
       const move = (e) => {
-        const x = Math.min(Math.max(e.clientX - dx - wrap.left, -start.width + 60), wrap.width - 60);
-        const y = Math.min(Math.max(e.clientY - dy - wrap.top, 0), Math.max(0, wrap.height - Math.min(start.height, wrap.height * 0.75)));
+        // Anywhere in the browser window, as long as a bit of it stays on screen to grab.
+        const vx = Math.min(Math.max(e.clientX - dx, 40 - start.width), window.innerWidth - 40);
+        const vy = Math.min(Math.max(e.clientY - dy, 0), window.innerHeight - 30);
+        const x = vx - wrap.left, y = vy - wrap.top;
         state.prefs[prefKey] = { x: x / wrap.width, y: y / wrap.height };
         applyPositions();
       };
@@ -851,8 +870,8 @@
         state.prefs.panelPos = { x: (r.left - wrap.left) / wrap.width, y: (r.top - wrap.top) / wrap.height };
       }
       const move = (e) => {
-        const w = Math.min(Math.max(220, r.width + e.clientX - ev.clientX), wrap.width * 0.95);
-        const h = Math.min(Math.max(200, r.height + e.clientY - ev.clientY), wrap.height * 0.95);
+        const w = Math.min(Math.max(160, r.width + e.clientX - ev.clientX), window.innerWidth);
+        const h = Math.min(Math.max(120, r.height + e.clientY - ev.clientY), window.innerHeight);
         state.prefs.panelSize = { w: Math.round(w), h: Math.round(h) };
         applyPositions();
       };

@@ -147,6 +147,20 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type === 'setAudioTabSelf') {
+    // From the on-page button: make the sending tab the audio source (or stop).
+    (async () => {
+      const old = await audioTabId();
+      const me = sender.tab?.id;
+      if (msg.on) await chrome.storage.session.set({ audioTabId: me });
+      else if (old === me) await chrome.storage.session.remove('audioTabId');
+      for (const id of new Set([old, me])) {
+        if (id != null) chrome.tabs.sendMessage(id, { type: 'roleChanged' }).catch(() => {});
+      }
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
   if (msg?.type === 'getAudioTab') {
     audioTabId().then((id) => sendResponse({ tabId: id }));
     return true;

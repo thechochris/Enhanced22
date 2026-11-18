@@ -264,7 +264,8 @@ var E22Auto = (function () {
     const durs = plays.map(playDuration);
     const known = durs.filter((d) => d != null);
     const pad = median(clips.map((c) => c.dur)) - median(known.length ? known : [5]);
-    const skipClip = clips.map(() => 1.6);
+    // Very short sideline-looking clips are usually a camera flip inside a play, not a play.
+    const skipClip = clips.map((c) => (c.dur < 4 ? 0.5 : 1.6));
     // Kicks: the camera follows the ball downfield, so the angle flips more than once and one
     // kickoff or punt can show up as two sideline-looking clips. Let a kick take two clips.
     const isKick = plays.map((p) => p.type === 'kickoff' || p.type === 'punt');
@@ -289,11 +290,17 @@ var E22Auto = (function () {
         const a = D[i - 1][j - 1] + matchCost(i - 1, j - 1);
         const b = D[i - 1][j] + skipClip[i - 1];
         const c = D[i][j - 1] + skipPlay[j - 1];
-        const k = isKick[j - 1] && i >= 2 && !(j - 1 in fixed && Math.abs(clips[i - 1].s - fixed[j - 1]) < NEAR_FIX)
-          ? D[i - 2][j - 1] + matchCost(i - 2, j - 1) + 0.2 : Infinity;
-        const best = Math.min(a, b, c, k);
+        // A kick's follow-up clips (the camera turning to follow the return) are short; taking
+        // them into the kick is favoured, which keeps the next play from landing mid-kick.
+        const tail = (x) => (clips[x].dur < 8 ? -0.6 : 0.4);
+        const pinned = (x) => fixedAt.some(([jj, t]) => jj !== j - 1 && Math.abs(clips[x].s - t) < NEAR_FIX);
+        const k = isKick[j - 1] && i >= 2 && !pinned(i - 1)
+          ? D[i - 2][j - 1] + matchCost(i - 2, j - 1) + tail(i - 1) : Infinity;
+        const k3 = isKick[j - 1] && i >= 3 && clips[i - 1].dur < 4 && !pinned(i - 1) && !pinned(i - 2)
+          ? D[i - 3][j - 1] + matchCost(i - 3, j - 1) + tail(i - 2) + tail(i - 1) : Infinity;
+        const best = Math.min(a, b, c, k, k3);
         D[i][j] = best;
-        B[i][j] = best === a ? 1 : best === k ? 4 : best === b ? 2 : 3;
+        B[i][j] = best === a ? 1 : best === k ? 4 : best === k3 ? 5 : best === b ? 2 : 3;
       }
     }
     const matches = new Map(); // play index -> clip index
@@ -307,6 +314,7 @@ var E22Auto = (function () {
       const b = B[i][j];
       if (b === 1) { matches.set(j - 1, i - 1); i--; j--; }
       else if (b === 4) { matches.set(j - 1, i - 2); extended.set(j - 1, i - 1); i -= 2; j--; }
+      else if (b === 5) { matches.set(j - 1, i - 3); extended.set(j - 1, i - 1); i -= 3; j--; }
       else if (b === 2) i--;
       else j--;
     }

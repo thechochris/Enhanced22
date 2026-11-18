@@ -26,13 +26,13 @@ The extension only reads the player's position and seeks it, like you would with
 
 The end of the sideline view is estimated as the midpoint between two snaps, since both angles show the same play. If one is off, press **E** at the moment the sideline view ends. Shift-click a play in the list to move its start to the current time.
 
-Drag the panel by its title bar (resize it from the grip in its bottom-right corner) and the score banner anywhere on the video. Double-click either one to put it back.
+Drag the panel by its title bar anywhere in the browser window, and resize it from the grip in its bottom-right corner and the score banner anywhere on the video. Double-click either one to put it back.
 
 ## Broadcast audio
 
 Each play in the data has the real wall-clock time of its snap, so after one matching point the broadcast can follow the All-22 film play by play.
 
-1. Open the same game's full broadcast replay in a second tab. Click the Enhanced22 button there and choose **Use this tab**.
+1. Open the same game's full broadcast replay in a second tab (ideally its own window), and click **Use this tab for broadcast audio** in the Enhanced22 panel there.
 2. In the All-22 tab, go to any synced play. Switch to the broadcast tab, find the same snap, and press **B**.
 3. Switch back to the All-22 tab and play. The broadcast tab follows, so you hear its audio over the All-22 film. Mute the All-22 video if it has its own sound.
 
