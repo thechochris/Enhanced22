@@ -12,9 +12,11 @@ const COLS = [
   'passer_player_name', 'receiver_player_name', 'rusher_player_name', 'yards_gained',
   'touchdown', 'td_team', 'interception', 'fumble_lost', 'sack', 'incomplete_pass',
   'return_yards', 'kickoff_returner_player_name', 'punt_returner_player_name',
+  'penalty', 'penalty_type', 'penalty_team', 'penalty_yards', 'penalty_player_name',
+  'sack_player_name', 'half_sack_1_player_name', 'half_sack_2_player_name',
 ];
 // Bump when the stored play fields change, so cached seasons are downloaded again.
-const SCHEMA = 2;
+const SCHEMA = 3;
 
 // Snaps that appear on film. Timeouts and administrative rows are dropped.
 const KEEP_TYPES = new Set([
@@ -118,6 +120,15 @@ async function downloadSeason(season) {
       fumLost: get('fumble_lost') === '1',
       sack: get('sack') === '1',
       inc: get('incomplete_pass') === '1',
+      sackedBy: [get('sack_player_name'), get('half_sack_1_player_name'), get('half_sack_2_player_name')].filter(Boolean),
+      pen: get('penalty') === '1' ? {
+        type: get('penalty_type') || 'Penalty',
+        team: get('penalty_team') || null,
+        player: get('penalty_player_name') || null,
+        yards: get('penalty_yards') === '' ? null : Number(get('penalty_yards')),
+        declined: !!get('penalty_type') && get('desc').toLowerCase().includes(`${get('penalty_type').toLowerCase()}, declined`),
+        offsetting: /offsetting/i.test(get('desc')),
+      } : null,
     });
   });
 

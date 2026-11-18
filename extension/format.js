@@ -49,6 +49,15 @@ var E22 = (function () {
     return `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n)} yd${Math.abs(n) === 1 ? '' : 's'}`;
   }
 
+  // "Penalty: Defensive Holding on DAL (K.Clark), 5 yds", or "... declined" / "offsetting".
+  function penaltyText(p) {
+    const x = p.pen;
+    if (!x) return '';
+    const who = x.team ? ` on ${x.team}${x.player ? ` (${x.player})` : ''}` : '';
+    const how = x.offsetting ? ', offsetting' : x.declined ? ', declined' : x.yards != null ? `, ${x.yards} yd${x.yards === 1 ? '' : 's'}` : '';
+    return `Penalty: ${x.type}${who}${how}`;
+  }
+
   // Who had the ball and the result, e.g. "B.Purdy → G.Kittle · +20 yds".
   // Penalties that wiped out the play show the players but no yards.
   function details(p) {
@@ -56,10 +65,12 @@ var E22 = (function () {
     const parts = [];
     const counted = p.type !== 'no_play';
     if (p.type === 'pass' || (p.type === 'no_play' && p.passer)) {
-      if (p.sack) parts.push(`${p.passer || 'QB'} sacked`);
+      if (p.sack) parts.push(`${p.passer || 'QB'} sacked${p.sackedBy?.length ? ` by ${p.sackedBy.join(' & ')}` : ''}`);
       else if (p.rusher && !p.receiver) parts.push(`${p.rusher} scramble`);
       else if (p.passer) parts.push(p.receiver ? `${p.passer} → ${p.receiver}` : p.passer);
       if (p.inc && !p.int) parts.push('incomplete');
+    } else if (p.type === 'no_play' && /\b([A-Z]\.[A-Za-z'.-]+) sacked\b/.test(p.desc || '')) {
+      parts.push(`${RegExp.$1} sacked (wiped out by the penalty)`);
     } else if (p.rusher) {
       parts.push(p.rusher);
     } else if ((p.type === 'kickoff' || p.type === 'punt') && p.returner) {
@@ -71,8 +82,27 @@ var E22 = (function () {
     }
     if (p.int) parts.push('INT');
     if (p.fumLost) parts.push('Fumble lost');
+    const pen = penaltyText(p);
+    if (pen) parts.push(pen);
     return parts.join(' · ');
   }
 
-  return { typeLabel, quarter, clock, downDistance, yardLine, score, details };
+  // Score before the play, as { home, away } (null when unknown).
+  function scores(p, game) {
+    if (p.posScore == null || !p.pos || !game) return { home: null, away: null };
+    const homeHasBall = p.pos === game.home;
+    return { home: homeHasBall ? p.posScore : p.defScore, away: homeHasBall ? p.defScore : p.posScore };
+  }
+
+  const TEAM_COLORS = {
+    ARI: '#97233F', ATL: '#A71930', BAL: '#241773', BUF: '#00338D', CAR: '#0085CA', CHI: '#C83803',
+    CIN: '#FB4F14', CLE: '#FF3C00', DAL: '#003594', DEN: '#FB4F14', DET: '#0076B6', GB: '#203731',
+    HOU: '#A71930', IND: '#002C5F', JAX: '#006778', KC: '#E31837', LA: '#003594', LAC: '#0080C6',
+    LV: '#A5ACAF', MIA: '#008E97', MIN: '#4F2683', NE: '#C60C30', NO: '#D3BC8D', NYG: '#0B2265',
+    NYJ: '#125740', PHI: '#004C54', PIT: '#FFB612', SEA: '#69BE28', SF: '#AA0000', TB: '#D50A0A',
+    TEN: '#4B92DB', WAS: '#5A1414',
+  };
+  const teamColor = (t) => TEAM_COLORS[t] || '#5b667d';
+
+  return { typeLabel, quarter, clock, downDistance, yardLine, score, scores, teamColor, details };
 })();

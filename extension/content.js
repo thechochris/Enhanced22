@@ -63,7 +63,7 @@
     state.game = activeGame;
     state.plays = data[pk] || [];
     // Plays saved by an older version lack player names and yards: fetch the season again.
-    if (state.plays.length && state.plays[0].yards === undefined && !loadActiveGame.refetched) {
+    if (state.plays.length && state.plays[0].sackedBy === undefined && !loadActiveGame.refetched) {
       loadActiveGame.refetched = true;
       const season = Number(String(activeGame.gameId).slice(0, 4));
       send({ type: 'getGames', season, refresh: true }).then(() => loadActiveGame());
@@ -283,9 +283,17 @@
     const v = state.video;
     // The broadcast simply keeps running from this play's snap (through the end zone view,
     // commentary included) until the next play starts, then jumps there.
-    const w = wallFor(i, t);
+    let w = wallFor(i, t);
+    // The All-22 shows each play twice, so on a quick next snap the broadcast would reach that
+    // snap while the end zone replay is still on screen, putting the audio a play ahead. Stop
+    // the broadcast just before the next snap and wait there until that play starts.
+    let waitNext = false;
+    if (w != null) {
+      const next = state.plays.slice(i + 1).find((p) => p.snapAt);
+      if (next && w > next.snapAt - 1500) { w = next.snapAt - 1500; waitNext = true; }
+    }
     const holding = hold.index != null;
-    const playing = !!w && !holding && !v.paused && !v.seeking && v.readyState >= 2;
+    const playing = !!w && !holding && !waitNext && !v.paused && !v.seeking && v.readyState >= 2;
     // Send at least 4 times a second, and right away when play starts, stops or changes.
     const key = `${i}|${playing}`;
     const now = performance.now();
@@ -299,7 +307,7 @@
       w,
       playing,
       reason: !w ? 'no synced play here'
-        : holding ? 'loading this play' : v.paused ? 'All-22 paused'
+        : holding ? 'loading this play' : waitNext ? 'waiting for the next play' : v.paused ? 'All-22 paused'
         : v.seeking || v.readyState < 2 ? 'All-22 buffering' : 'playing',
       rate: v.playbackRate,
       sentAt: Date.now(), // lets the broadcast tab allow for the time the message took
@@ -420,11 +428,11 @@
     const drift = v.currentTime - b; // > 0: broadcast is ahead
     // Learn how far ahead to aim a seek: after each one, see where we actually landed once
     // playing again and correct the lead for next time (instead of a fixed guess).
-    if (seekCheck && !v.paused && v.readyState >= 3 && Math.abs(drift) < 3) {
+    if (seekCheck && !v.paused && v.readyState >= 3 && Math.abs(drift) < 1) {
       seekCheck = false;
       seekLead = Math.min(1.5, Math.max(0, seekLead - drift * 0.6));
     }
-    if (Math.abs(drift) > 3 && now - lastFollowSeek > 2000) {
+    if (Math.abs(drift) > 1 && now - lastFollowSeek > 2000) {
       console.info('[Enhanced22] broadcast audio seek', v.currentTime, '->', b, 'lead', seekLead.toFixed(2));
       lastFollowSeek = now;
       v.playbackRate = msg.rate;
@@ -512,12 +520,26 @@
     :host { all: initial; }
     * { box-sizing: border-box; font-family: "Segoe UI", system-ui, sans-serif; }
     .wrap { position: absolute; inset: 0; pointer-events: none; }
-    .bug { position: absolute; top: 12px; left: 12px; background: rgba(10,14,22,.82); color: #fff;
-      border-radius: 8px; padding: 8px 12px; min-width: 260px; box-shadow: 0 2px 10px rgba(0,0,0,.4); }
-    .bug .l1 { display: flex; gap: 10px; align-items: baseline; font-size: 18px; font-weight: 700; }
-    .bug .clock { font-variant-numeric: tabular-nums; }
-    .bug .dd { color: #ffd34d; }
-    .bug .l2 { display: flex; gap: 10px; align-items: center; margin-top: 4px; font-size: 13px; color: #cfd6e4; }
+    /* Scorebug, broadcast style: two team blocks with big scores, then the game state. */
+    .bug { position: absolute; top: 12px; left: 12px; color: #fff; box-shadow: 0 3px 14px rgba(0,0,0,.5);
+      border-radius: 6px; overflow: hidden; font-variant-numeric: tabular-nums; min-width: 340px; }
+    .bug .sb { display: flex; align-items: stretch; height: 52px; background: #0d1119; }
+    .bug .team { display: flex; align-items: center; gap: 8px; padding: 0 10px 0 8px; min-width: 104px;
+      position: relative; border-right: 1px solid rgba(255,255,255,.12); }
+    .bug .team::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--tc, #555); }
+    .bug .team .ab { font-size: 16px; font-weight: 800; letter-spacing: .5px; margin-left: 4px; }
+    .bug .team .pts { font-size: 32px; font-weight: 800; margin-left: auto; line-height: 1; }
+    .bug .team .ball { width: 7px; height: 7px; border-radius: 50%; background: #ffd34d; visibility: hidden; }
+    .bug .team.has .ball { visibility: visible; }
+    .bug .team.has { background: linear-gradient(90deg, rgba(255,211,77,.12), transparent); }
+    .bug .gs { display: flex; flex-direction: column; justify-content: center; padding: 0 12px; gap: 2px; }
+    .bug .gs .clock { font-size: 15px; font-weight: 700; white-space: nowrap; }
+    .bug .gs .sit { font-size: 13px; font-weight: 700; color: #ffd34d; white-space: nowrap; }
+    .bug .gs .sit .yl { color: #cfd6e4; font-weight: 600; margin-left: 6px; }
+    .bug .strip { display: flex; align-items: center; gap: 8px; padding: 4px 10px; background: rgba(13,17,25,.88);
+      border-top: 2px solid #2f6fed; font-size: 12.5px; color: #e6ebf5; min-height: 24px; }
+    .bug .strip .l3 { flex: 1; }
+    .bug .strip:has(.l3:empty) .l3 { display: none; }
     .badge { background: #2f6fed; color: #fff; border-radius: 4px; padding: 1px 6px; font-size: 12px; font-weight: 600; }
     .sync { position: absolute; left: 12px; bottom: 56px; background: rgba(10,14,22,.85); color: #fff;
       border-radius: 8px; padding: 8px 12px; font-size: 13px; max-width: 60%; border-left: 3px solid #ffd34d; }
@@ -583,8 +605,7 @@
     .row.cur .det { color: #fff; }
     .td { background: #e5484d; color: #fff; border-radius: 3px; padding: 0 5px; font-size: 11px; font-weight: 700; margin-left: 6px; }
     .row.tdrow { box-shadow: inset 3px 0 0 #e5484d; }
-    .bug .l3 { margin-top: 4px; font-size: 13px; color: #fff; }
-    .bug .l3:empty { display: none; }
+
     .empty { padding: 12px; color: #9aa6bd; font-size: 12px; line-height: 1.5; }
     .hidden { display: none !important; }
   `;
@@ -597,9 +618,14 @@
     root.innerHTML = `
       <style>${CSS}</style>
       <div class="wrap">
-        <div class="bug hidden"><div class="l1"><span class="clock"></span><span class="dd"></span><span class="yl"></span></div>
-          <div class="l2"><span class="poss"></span><span class="score"></span><span class="badge"></span></div>
-          <div class="l3"></div></div>
+        <div class="bug hidden">
+          <div class="sb">
+            <div class="team away"><span class="ball"></span><span class="ab"></span><span class="pts"></span></div>
+            <div class="team home"><span class="ball"></span><span class="ab"></span><span class="pts"></span></div>
+            <div class="gs"><span class="clock"></span><span class="sit"><span class="dd"></span><span class="yl"></span></span></div>
+          </div>
+          <div class="strip"><span class="badge"></span><span class="l3"></span></div>
+        </div>
         <div class="sync hidden"></div>
         <div class="audio hidden"><span class="atext"></span><button class="bscan">Find plays in this broadcast</button><button class="bexport">Export broadcast scan</button><button class="breset">Reset audio sync</button><button class="astop">Stop using this tab for audio</button></div>
         <div class="toast"></div>
@@ -632,8 +658,8 @@
     el.clock = root.querySelector('.clock');
     el.dd = root.querySelector('.dd');
     el.yl = root.querySelector('.yl');
-    el.poss = root.querySelector('.poss');
-    el.score = root.querySelector('.score');
+    el.away = root.querySelector('.bug .team.away');
+    el.home = root.querySelector('.bug .team.home');
     el.badge = root.querySelector('.badge');
     el.l3 = root.querySelector('.bug .l3');
     el.title = root.querySelector('header .title');
@@ -773,8 +799,14 @@
       el.clock.textContent = `${E22.quarter(p.qtr)} ${E22.clock(p.time)}`;
       el.dd.textContent = E22.downDistance(p);
       el.yl.textContent = p.type === 'kickoff' ? '' : E22.yardLine(p);
-      el.poss.textContent = p.pos ? (p.type === 'kickoff' ? `${p.pos} receives` : `${p.pos} ball`) : '';
-      el.score.textContent = E22.score(p, state.game);
+      const g = state.game;
+      const sc = E22.scores(p, g);
+      for (const [node, team, pts] of [[el.away, g.away, sc.away], [el.home, g.home, sc.home]]) {
+        node.style.setProperty('--tc', E22.teamColor(team));
+        node.querySelector('.ab').textContent = team;
+        node.querySelector('.pts').textContent = pts ?? '';
+        node.classList.toggle('has', p.pos === team);
+      }
       el.badge.textContent = E22.typeLabel(p);
       el.l3.textContent = E22.details(p);
       if (p.td) {
