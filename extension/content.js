@@ -243,7 +243,8 @@
       gameId: state.game.gameId,
       playIndex: i,
       w: p && p.snapAt ? p.snapAt + since * 1000 + state.audioOffset * 1000 : null,
-      playing: !!p && !state.video.paused && !inEndZone, // the end zone replay stays quiet
+      // Quiet during the end zone replay, and while the All-22 video is seeking or buffering.
+      playing: !!p && !state.video.paused && !state.video.seeking && state.video.readyState >= 3 && !inEndZone,
       rate: state.video.playbackRate,
     });
   }
@@ -256,6 +257,7 @@
     return a.b + (w - a.w) / 1000;
   }
 
+  let lastFollowSeek = 0;
   function followAudio(msg) {
     state.lastDrive = msg;
     renderAudioBadge();
@@ -266,12 +268,23 @@
     const b = broadcastTimeFor(msg.w);
     if (!msg.playing || b == null) { if (!v.paused) v.pause(); return; }
     v.muted = false;
-    if (v.playbackRate !== msg.rate) v.playbackRate = msg.rate;
-    if (Math.abs(v.currentTime - b) > 0.4) {
-      console.info('[Enhanced22] broadcast audio follow', v.currentTime, '->', b);
-      v.currentTime = b;
-    }
     if (v.paused) v.play().catch(() => {});
+    // Streams can't land exactly where you seek and take a moment to buffer, so constant small
+    // seeks would loop the same second of audio. Seek only for big jumps (a new play), at most
+    // every 2 seconds, and never mid-seek; close the remaining gap by playing slightly faster or
+    // slower (pitch is preserved).
+    if (v.seeking) return;
+    const now = performance.now();
+    const drift = v.currentTime - b; // > 0: broadcast is ahead
+    if (Math.abs(drift) > 3 && now - lastFollowSeek > 2000) {
+      console.info('[Enhanced22] broadcast audio seek', v.currentTime, '->', b);
+      lastFollowSeek = now;
+      v.playbackRate = msg.rate;
+      v.currentTime = b + 0.3; // seeking takes a moment; aim slightly ahead
+      return;
+    }
+    const want = Math.abs(drift) > 0.25 ? msg.rate * (drift > 0 ? 0.9 : 1.1) : msg.rate;
+    if (Math.abs(v.playbackRate - want) > 0.001) v.playbackRate = want;
   }
 
   function addAnchor() {
