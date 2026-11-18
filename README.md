@@ -56,3 +56,7 @@ If the broadcast replay has cuts (commercial breaks removed), add another **B** 
 
 - Not yet tested on the live NFL+ site. If NFL+ plays video inside a frame on a non-nfl.com domain, the page match in `manifest.json` needs that domain added.
 - The overlay can't draw over a video that is itself fullscreen, only over a fullscreen player container (which is how most players work).
+
+## Play details
+
+Each play in the list and in the on-video overlay shows who had the ball (passer → intended receiver, ball carrier, sacked quarterback, or kick returner), the yards gained or lost, interceptions and lost fumbles, and a red **TD** tag on touchdowns. These come from the same nflverse play-by-play. Seasons downloaded by an older version are downloaded again automatically the first time.

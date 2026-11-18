@@ -62,6 +62,12 @@
     const data = await storeGet([pk, mk]);
     state.game = activeGame;
     state.plays = data[pk] || [];
+    // Plays saved by an older version lack player names and yards: fetch the season again.
+    if (state.plays.length && state.plays[0].yards === undefined && !loadActiveGame.refetched) {
+      loadActiveGame.refetched = true;
+      const season = Number(String(activeGame.gameId).slice(0, 4));
+      send({ type: 'getGames', season, refresh: true }).then(() => loadActiveGame());
+    }
     const saved = data[mk] || {};
     state.marks = saved.marks || {};
     state.history = saved.history || [];
@@ -564,6 +570,12 @@
     .row .t { font-variant-numeric: tabular-nums; color: #cfd6e4; }
     .row .pos { font-weight: 700; }
     .row .ty .sit { color: #9aa6bd; }
+    .row .det { grid-column: 3; color: #cfd6e4; font-size: 12px; margin-top: -2px; }
+    .row.cur .det { color: #fff; }
+    .td { background: #e5484d; color: #fff; border-radius: 3px; padding: 0 5px; font-size: 11px; font-weight: 700; margin-left: 6px; }
+    .row.tdrow { box-shadow: inset 3px 0 0 #e5484d; }
+    .bug .l3 { margin-top: 4px; font-size: 13px; color: #fff; }
+    .bug .l3:empty { display: none; }
     .empty { padding: 12px; color: #9aa6bd; font-size: 12px; line-height: 1.5; }
     .hidden { display: none !important; }
   `;
@@ -577,7 +589,8 @@
       <style>${CSS}</style>
       <div class="wrap">
         <div class="bug hidden"><div class="l1"><span class="clock"></span><span class="dd"></span><span class="yl"></span></div>
-          <div class="l2"><span class="poss"></span><span class="score"></span><span class="badge"></span></div></div>
+          <div class="l2"><span class="poss"></span><span class="score"></span><span class="badge"></span></div>
+          <div class="l3"></div></div>
         <div class="sync hidden"></div>
         <div class="audio hidden"><span class="atext"></span><button class="astop">Stop using this tab for audio</button></div>
         <div class="toast"></div>
@@ -613,6 +626,7 @@
     el.poss = root.querySelector('.poss');
     el.score = root.querySelector('.score');
     el.badge = root.querySelector('.badge');
+    el.l3 = root.querySelector('.bug .l3');
     el.title = root.querySelector('header .title');
     el.sub = root.querySelector('header .sub');
     el.status = root.querySelector('header .status');
@@ -723,6 +737,13 @@
       el.poss.textContent = p.pos ? (p.type === 'kickoff' ? `${p.pos} receives` : `${p.pos} ball`) : '';
       el.score.textContent = E22.score(p, state.game);
       el.badge.textContent = E22.typeLabel(p);
+      el.l3.textContent = E22.details(p);
+      if (p.td) {
+        const td = document.createElement('span');
+        td.className = 'td';
+        td.textContent = p.tdTeam ? `TD ${p.tdTeam}` : 'TD';
+        el.l3.appendChild(td);
+      }
       highlightRow(i);
     }
     if (i !== lastBugIndex) { lastBugIndex = i; if (!show) highlightRow(i); }
@@ -780,7 +801,16 @@
       const dd = E22.downDistance(p);
       sit.textContent = dd && dd !== E22.typeLabel(p) ? ` · ${dd}` : '';
       ty.appendChild(sit);
+      if (p.td) {
+        const td = document.createElement('span');
+        td.className = 'td';
+        td.textContent = p.tdTeam && p.tdTeam !== p.pos ? `TD ${p.tdTeam}` : 'TD';
+        ty.appendChild(td);
+        row.classList.add('tdrow');
+      }
       row.append(t, pos, ty);
+      const det = E22.details(p);
+      if (det) { const d = document.createElement('span'); d.className = 'det'; d.textContent = det; row.appendChild(d); }
       frag.appendChild(row);
     });
     el.list.appendChild(frag);

@@ -9,7 +9,12 @@ const COLS = [
   'posteam', 'defteam', 'qtr', 'time', 'down', 'ydstogo', 'yrdln', 'goal_to_go',
   'play_type', 'play_type_nfl', 'posteam_score', 'defteam_score', 'two_point_attempt', 'desc',
   'time_of_day', 'end_clock_time',
+  'passer_player_name', 'receiver_player_name', 'rusher_player_name', 'yards_gained',
+  'touchdown', 'td_team', 'interception', 'fumble_lost', 'sack', 'incomplete_pass',
+  'return_yards', 'kickoff_returner_player_name', 'punt_returner_player_name',
 ];
+// Bump when the stored play fields change, so cached seasons are downloaded again.
+const SCHEMA = 2;
 
 // Snaps that appear on film. Timeouts and administrative rows are dropped.
 const KEEP_TYPES = new Set([
@@ -100,6 +105,19 @@ async function downloadSeason(season) {
       // Wall-clock time of the snap and of the end of the play (UTC, ms precision).
       snapAt: get('time_of_day') ? Date.parse(get('time_of_day')) : null,
       endAt: get('end_clock_time') ? Date.parse(get('end_clock_time')) : null,
+      // Who had the ball and what came of it.
+      passer: get('passer_player_name') || null,
+      receiver: get('receiver_player_name') || null,
+      rusher: get('rusher_player_name') || null,
+      returner: get('kickoff_returner_player_name') || get('punt_returner_player_name') || null,
+      yards: get('yards_gained') === '' || get('yards_gained') === 'NA' ? null : Number(get('yards_gained')),
+      retYards: get('return_yards') === '' || get('return_yards') === 'NA' ? null : Number(get('return_yards')),
+      td: get('touchdown') === '1',
+      tdTeam: get('td_team') && get('td_team') !== 'NA' ? get('td_team') : null,
+      int: get('interception') === '1',
+      fumLost: get('fumble_lost') === '1',
+      sack: get('sack') === '1',
+      inc: get('incomplete_pass') === '1',
     });
   });
 
@@ -120,7 +138,7 @@ async function downloadSeason(season) {
     toStore[`plays:${gid}`] = g.plays;
   }
   index.sort((a, b) => a.week - b.week || a.date.localeCompare(b.date) || a.gameId.localeCompare(b.gameId));
-  toStore[`season:${season}`] = { fetchedAt: Date.now(), games: index };
+  toStore[`season:${season}`] = { fetchedAt: Date.now(), games: index, schema: SCHEMA };
   await chrome.storage.local.set(toStore);
   return index;
 }
@@ -128,7 +146,7 @@ async function downloadSeason(season) {
 async function getGames(season, refresh) {
   const key = `season:${season}`;
   const cached = (await chrome.storage.local.get(key))[key];
-  if (cached && !refresh && Date.now() - cached.fetchedAt < STALE_MS) return cached.games;
+  if (cached && !refresh && cached.schema === SCHEMA && Date.now() - cached.fetchedAt < STALE_MS) return cached.games;
   try {
     return await downloadSeason(season);
   } catch (err) {

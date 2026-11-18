@@ -45,5 +45,34 @@ var E22 = (function () {
     return `${game.away} ${away} – ${game.home} ${home}`;
   }
 
-  return { typeLabel, quarter, clock, downDistance, yardLine, score };
+  function yds(n) {
+    return `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n)} yd${Math.abs(n) === 1 ? '' : 's'}`;
+  }
+
+  // Who had the ball and the result, e.g. "B.Purdy → G.Kittle · +20 yds".
+  // Penalties that wiped out the play show the players but no yards.
+  function details(p) {
+    if (p.yards === undefined) return ''; // data downloaded before this was added
+    const parts = [];
+    const counted = p.type !== 'no_play';
+    if (p.type === 'pass' || (p.type === 'no_play' && p.passer)) {
+      if (p.sack) parts.push(`${p.passer || 'QB'} sacked`);
+      else if (p.rusher && !p.receiver) parts.push(`${p.rusher} scramble`);
+      else if (p.passer) parts.push(p.receiver ? `${p.passer} → ${p.receiver}` : p.passer);
+      if (p.inc && !p.int) parts.push('incomplete');
+    } else if (p.rusher) {
+      parts.push(p.rusher);
+    } else if ((p.type === 'kickoff' || p.type === 'punt') && p.returner) {
+      parts.push(`${p.returner} return`);
+      if (p.retYards != null && counted) parts.push(yds(p.retYards).replace('+', ''));
+    }
+    if (counted && p.yards != null && !p.inc && !p.int && (p.type === 'pass' || p.type === 'run' || p.type === 'qb_kneel')) {
+      parts.push(yds(p.yards));
+    }
+    if (p.int) parts.push('INT');
+    if (p.fumLost) parts.push('Fumble lost');
+    return parts.join(' · ');
+  }
+
+  return { typeLabel, quarter, clock, downDistance, yardLine, score, details };
 })();
