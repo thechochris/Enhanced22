@@ -63,7 +63,7 @@
     state.game = activeGame;
     state.plays = data[pk] || [];
     // Plays saved by an older version lack player names and yards: fetch the season again.
-    if (state.plays.length && state.plays[0].sackedBy === undefined && !loadActiveGame.refetched) {
+    if (state.plays.length && state.plays[0].kicker === undefined && !loadActiveGame.refetched) {
       loadActiveGame.refetched = true;
       const season = Number(String(activeGame.gameId).slice(0, 4));
       send({ type: 'getGames', season, refresh: true }).then(() => loadActiveGame());
@@ -618,9 +618,16 @@
     .row .ty .sit { color: #9aa6bd; }
     .row .det { grid-column: 3; color: #cfd6e4; font-size: 12px; margin-top: -2px; }
     .row.cur .det { color: #fff; }
-    .td { background: #e5484d; color: #fff; border-radius: 3px; padding: 0 5px; font-size: 11px; font-weight: 700; margin-left: 6px; }
+    .td { white-space: nowrap; background: #e5484d; color: #fff; border-radius: 3px; padding: 0 5px; font-size: 11px; font-weight: 700; margin-left: 6px; }
     .row.tdrow { box-shadow: inset 3px 0 0 #e5484d; }
 
+    .searchbar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,.08); }
+    .search { flex: 1; min-width: 0; font: inherit; font-size: 12px; color: #fff; background: #10151f;
+      border: 1px solid #3a4560; border-radius: 5px; padding: 5px 8px; outline: none; }
+    .search:focus { border-color: #2f6fed; }
+    .scount { font-size: 11px; color: #9aa6bd; white-space: nowrap; }
+    .fg { white-space: nowrap; color: #fff; border-radius: 3px; padding: 0 5px; font-size: 11px; font-weight: 700; margin-left: 6px; background: #1f9d55; }
+    .fg.miss { background: #5b667d; }
     .empty { padding: 12px; color: #9aa6bd; font-size: 12px; line-height: 1.5; }
     .hidden { display: none !important; }
   `;
@@ -665,11 +672,19 @@
               <button data-act="diag" title="Copy technical details about this player to send to the developer">Copy diagnostics</button>
             </div>
             <div class="status"></div></header>
+          <div class="searchbar"><input class="search" type="search" placeholder="Search plays: player, team, touchdown, field goal…" aria-label="Search plays"><span class="scount"></span></div>
           <div class="list"></div>
           <div class="resize" title="Drag to resize · double-click to reset"></div>
         </div>
       </div>`;
-    for (const k of ['bug', 'sync', 'toast', 'panel', 'list', 'audio']) el[k] = root.querySelector(`.${k}`);
+    for (const k of ['bug', 'sync', 'toast', 'panel', 'list', 'audio', 'searchbar', 'search', 'scount']) el[k] = root.querySelector(`.${k}`);
+    // Typing in the search box is for the box only: keep the player's own shortcuts out of it.
+    for (const type of ['keydown', 'keyup', 'keypress']) el.search.addEventListener(type, (ev) => {
+      ev.stopPropagation();
+      if (type === 'keydown' && ev.key === 'Escape') { el.search.value = ''; applySearch(); el.search.blur(); }
+    });
+    let searchTimer = 0;
+    el.search.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(applySearch, 120); });
     el.clock = root.querySelector('.clock');
     el.dd = root.querySelector('.dd');
     el.yl = root.querySelector('.yl');
@@ -780,7 +795,7 @@
       state.video.play?.();
     });
     // Keep keyboard focus on the page, not the checkboxes.
-    root.addEventListener('mouseup', () => { if (root.activeElement?.blur) root.activeElement.blur(); });
+    root.addEventListener('mouseup', () => { const a = root.activeElement; if (a?.blur && !(a.tagName === 'INPUT' && a.type !== 'checkbox') && a.tagName !== 'SELECT') a.blur(); });
   }
 
   function placeHost() {
@@ -856,6 +871,7 @@
     if (!root) return;
     el.list.innerHTML = '';
     lastBugIndex = null;
+    el.searchbar.classList.toggle('hidden', !state.game || !!state.picking);
     if (!state.game || state.picking) {
       el.title.textContent = 'Enhanced22';
       el.sub.textContent = '';
@@ -894,12 +910,42 @@
         ty.appendChild(td);
         row.classList.add('tdrow');
       }
+      const k = E22.kick(p);
+      if (k && k.outcome) {
+        const tag = document.createElement('span');
+        tag.className = `fg${k.good ? '' : ' miss'}`;
+        tag.textContent = `${k.fg ? 'FG' : 'XP'} ${k.good ? '✓' : k.blocked ? 'blocked' : '✗'}`;
+        ty.appendChild(tag);
+      }
       row.append(t, pos, ty);
       const det = E22.details(p);
       if (det) { const d = document.createElement('span'); d.className = 'det'; d.textContent = det; row.appendChild(d); }
       frag.appendChild(row);
     });
     el.list.appendChild(frag);
+    applySearch();
+  }
+
+  // Show only the plays that match the search box (and the quarter headers that still have any).
+  function applySearch() {
+    if (!el.search || !state.game || state.picking) return;
+    const q = el.search.value.trim();
+    let shown = 0;
+    let header = null, headerHas = false;
+    for (const node of el.list.children) {
+      if (node.classList.contains('qh')) {
+        if (header) header.classList.toggle('hidden', !headerHas);
+        header = node; headerHas = false;
+        continue;
+      }
+      if (!node.classList.contains('row')) continue;
+      const p = state.plays[Number(node.dataset.i)];
+      const ok = !q || (p && E22.matches(p, q));
+      node.classList.toggle('hidden', !ok);
+      if (ok) { shown++; headerHas = true; }
+    }
+    if (header) header.classList.toggle('hidden', !headerHas);
+    el.scount.textContent = q ? `${shown} of ${state.plays.length}` : '';
   }
 
   // ---------- game picker (inside the panel) ----------

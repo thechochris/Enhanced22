@@ -14,9 +14,10 @@ const COLS = [
   'return_yards', 'kickoff_returner_player_name', 'punt_returner_player_name',
   'penalty', 'penalty_type', 'penalty_team', 'penalty_yards', 'penalty_player_name',
   'sack_player_name', 'half_sack_1_player_name', 'half_sack_2_player_name',
+  'kicker_player_name', 'field_goal_result', 'extra_point_result', 'kick_distance',
 ];
 // Bump when the stored play fields change, so cached seasons are downloaded again.
-const SCHEMA = 3;
+const SCHEMA = 4;
 
 // Snaps that appear on film. Timeouts and administrative rows are dropped.
 const KEEP_TYPES = new Set([
@@ -120,6 +121,10 @@ async function downloadSeason(season) {
       fumLost: get('fumble_lost') === '1',
       sack: get('sack') === '1',
       inc: get('incomplete_pass') === '1',
+      kicker: get('kicker_player_name') && get('kicker_player_name') !== 'NA' ? get('kicker_player_name') : null,
+      fgResult: get('field_goal_result') && get('field_goal_result') !== 'NA' ? get('field_goal_result') : null, // made, missed, blocked
+      xpResult: get('extra_point_result') && get('extra_point_result') !== 'NA' ? get('extra_point_result') : null, // good, failed, blocked
+      kickDist: get('kick_distance') === '' || get('kick_distance') === 'NA' ? null : Number(get('kick_distance')),
       sackedBy: [get('sack_player_name'), get('half_sack_1_player_name'), get('half_sack_2_player_name')].filter(Boolean),
       pen: get('penalty') === '1' ? {
         type: get('penalty_type') || 'Penalty',

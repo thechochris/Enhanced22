@@ -58,12 +58,46 @@ var E22 = (function () {
     return `Penalty: ${x.type}${who}${how}`;
   }
 
+  // A field goal or extra point: who kicked, from how far, and how it went. Data saved before
+  // these fields existed falls back to the play description ("18-E.Pineiro 28 yard field goal
+  // is GOOD").
+  function kick(p) {
+    if (p.type !== 'field_goal' && p.type !== 'extra_point') return null;
+    const d = p.desc || '';
+    const fg = p.type === 'field_goal';
+    let kicker = p.kicker || null;
+    let dist = p.kickDist ?? null;
+    let result = fg ? p.fgResult : p.xpResult;
+    const m = fg ? d.match(/(?:\d+-)?([A-Z][A-Za-z'.-]*\.[A-Za-z'.-]+) (\d+) yard field goal is (GOOD|No Good|BLOCKED)/i)
+      : d.match(/(?:\d+-)?([A-Z][A-Za-z'.-]*\.[A-Za-z'.-]+) extra point is (GOOD|No Good|Blocked|Aborted)/i);
+    if (m) {
+      kicker = kicker || m[1];
+      if (fg && dist == null) dist = Number(m[2]);
+      if (!result) {
+        const r = (fg ? m[3] : m[2]).toLowerCase();
+        result = r === 'good' ? (fg ? 'made' : 'good') : r === 'blocked' ? 'blocked' : fg ? 'missed' : 'failed';
+      }
+    }
+    if (!kicker && !result) return null;
+    const good = result === 'made' || result === 'good';
+    const outcome = good ? 'Good' : result === 'blocked' ? 'Blocked' : result ? 'No good' : '';
+    return { kicker, dist, good, blocked: result === 'blocked', outcome, fg };
+  }
+
   // Who had the ball and the result, e.g. "B.Purdy → G.Kittle · +20 yds".
   // Penalties that wiped out the play show the players but no yards.
   function details(p) {
-    if (p.yards === undefined) return ''; // data downloaded before this was added
+    if (p.yards === undefined && !kick(p)) return ''; // data downloaded before this was added
     const parts = [];
     const counted = p.type !== 'no_play';
+    const k = kick(p);
+    if (k) {
+      parts.push([k.kicker, k.fg ? (k.dist ? `${k.dist}-yd field goal` : 'field goal') : 'extra point'].filter(Boolean).join(' '));
+      if (k.outcome) parts.push(k.outcome);
+      const pen = penaltyText(p);
+      if (pen) parts.push(pen);
+      return parts.join(' · ');
+    }
     if (p.type === 'pass' || (p.type === 'no_play' && p.passer)) {
       if (p.sack) parts.push(`${p.passer || 'QB'} sacked${p.sackedBy?.length ? ` by ${p.sackedBy.join(' & ')}` : ''}`);
       else if (p.rusher && !p.receiver) parts.push(`${p.rusher} scramble`);
@@ -104,5 +138,51 @@ var E22 = (function () {
   };
   const teamColor = (t) => TEAM_COLORS[t] || '#5b667d';
 
-  return { typeLabel, quarter, clock, downDistance, yardLine, score, scores, teamColor, details };
+  const TEAM_NAMES = {
+    ARI: 'cardinals arizona', ATL: 'falcons atlanta', BAL: 'ravens baltimore', BUF: 'bills buffalo',
+    CAR: 'panthers carolina', CHI: 'bears chicago', CIN: 'bengals cincinnati', CLE: 'browns cleveland',
+    DAL: 'cowboys dallas', DEN: 'broncos denver', DET: 'lions detroit', GB: 'packers green bay',
+    HOU: 'texans houston', IND: 'colts indianapolis', JAX: 'jaguars jacksonville', KC: 'chiefs kansas city',
+    LA: 'rams los angeles', LAC: 'chargers los angeles', LV: 'raiders las vegas', MIA: 'dolphins miami',
+    MIN: 'vikings minnesota', NE: 'patriots new england', NO: 'saints new orleans', NYG: 'giants new york',
+    NYJ: 'jets new york', PHI: 'eagles philadelphia', PIT: 'steelers pittsburgh', SEA: 'seahawks seattle',
+    SF: '49ers niners san francisco', TB: 'buccaneers bucs tampa bay', TEN: 'titans tennessee',
+    WAS: 'commanders washington',
+  };
+  // Words that describe a play, for the search box.
+  function searchText(p) {
+    const k = kick(p);
+    const words = [
+      typeLabel(p), p.desc, details(p), quarter(p.qtr), clock(p.time),
+      p.td && 'touchdown td', p.int && 'interception int pick', p.fumLost && 'fumble',
+      p.sack && 'sack', p.pen && 'penalty flag', p.inc && 'incomplete',
+      p.type === 'field_goal' && 'field goal fg', p.type === 'extra_point' && 'extra point pat xp',
+      k && (k.good ? 'good made' : k.blocked ? 'blocked' : 'no good missed miss'),
+      p.twoPt && 'two point 2pt conversion', p.type === 'pass' && 'pass passing', p.type === 'run' && 'run rush rushing',
+    ];
+    return words.filter(Boolean).join(' ').toLowerCase();
+  }
+  // Does a play match the search? Every word must appear. A team (SF, 49ers, Cowboys...)
+  // means plays where that team had the ball.
+  function matches(p, query) {
+    const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) return true;
+    const text = searchText(p);
+    let i = 0;
+    while (i < words.length) {
+      // Two-word team names first ("green bay", "san francisco").
+      const two = i + 1 < words.length ? `${words[i]} ${words[i + 1]}` : null;
+      const team = (w) => Object.keys(TEAM_NAMES).filter((t) => t.toLowerCase() === w || TEAM_NAMES[t].split(' ').includes(w) || (w.includes(' ') && TEAM_NAMES[t].includes(w)));
+      let ts = two ? team(two) : [];
+      let used = ts.length ? 2 : 1;
+      if (!ts.length) ts = team(words[i]);
+      if (ts.length) {
+        if (!ts.includes(p.pos)) return false;
+      } else if (!text.includes(words[i])) return false;
+      i += used;
+    }
+    return true;
+  }
+
+  return { matches, searchText, kick, typeLabel, quarter, clock, downDistance, yardLine, score, scores, teamColor, details };
 })();
