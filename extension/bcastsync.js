@@ -13,6 +13,8 @@
 /* exported E22Bcast */
 var E22Bcast = (function () {
   const BREAK_GAP = 140000; // ms between snaps that means a commercial break
+  // Shorter breaks (timeouts, reviews) still cut some time out, so stretches split at this.
+  const SPLIT_GAP = 75000;
   const TOL = 0.75; // s: how close a candidate must be to count as that play's snap
 
   function quantile(xs, q) {
@@ -69,7 +71,7 @@ var E22Bcast = (function () {
     const segs = [];
     let cur = [];
     for (let k = 0; k < ps.length; k++) {
-      if (k && ps[k].snapAt - ps[k - 1].snapAt > BREAK_GAP) { segs.push(cur); cur = []; }
+      if (k && ps[k].snapAt - ps[k - 1].snapAt > SPLIT_GAP) { segs.push(cur); cur = []; }
       cur.push(ps[k]);
     }
     if (cur.length) segs.push(cur);
@@ -88,6 +90,24 @@ var E22Bcast = (function () {
     return best;
   }
 
+  function refine(rel, cands, o) {
+    for (let it = 0; it < 2; it++) {
+      const res = [];
+      for (const r of rel) {
+        const c = nearest(cands, o + r);
+        if (c != null && Math.abs(c - (o + r)) <= TOL) res.push(c - (o + r));
+      }
+      if (!res.length) break;
+      o += quantile(res, 0.5);
+    }
+    let matched = 0, last = -1;
+    rel.forEach((r, i) => {
+      const c = nearest(cands, o + r);
+      if (c != null && Math.abs(c - (o + r)) <= TOL) { matched++; last = i; }
+    });
+    return { o, matched, last };
+  }
+
   // Best offset (broadcast seconds of the segment's first snap) within [lo, hi].
   function fitSegment(seg, cands, lo, hi) {
     const rel = seg.map((p) => (p.snapAt - seg[0].snapAt) / 1000);
@@ -100,30 +120,27 @@ var E22Bcast = (function () {
     }
     if (!votes.length) return null;
     votes.sort((x, y) => x - y);
-    let best = null;
+    // Every 1.5 s window of votes is a possible offset. The busiest window can be a near miss
+    // (plays spaced alike can line up loosely at the wrong offset), so the few busiest distinct
+    // windows are each refined and the one where the most plays truly line up wins.
+    const peaks = [];
     let j = 0;
     for (let i = 0; i < votes.length; i++) {
       while (votes[i] - votes[j] > 2 * TOL) j++;
-      const n = i - j + 1;
-      if (!best || n > best.n) best = { n, o: (votes[i] + votes[j]) / 2 };
+      peaks.push({ n: i - j + 1, o: (votes[i] + votes[j]) / 2 });
     }
-    // Refine: median residual of the plays that matched.
-    let o = best.o;
-    for (let it = 0; it < 2; it++) {
-      const res = [];
-      for (const r of rel) {
-        const c = nearest(cands, o + r);
-        if (c != null && Math.abs(c - (o + r)) <= TOL) res.push(c - (o + r));
-      }
-      if (!res.length) break;
-      o += quantile(res, 0.5);
+    peaks.sort((x, y) => y.n - x.n);
+    const tried = [];
+    let best = null;
+    for (const pk of peaks) {
+      if (tried.length >= 6) break;
+      if (tried.some((o) => Math.abs(o - pk.o) < 2 * TOL)) continue;
+      tried.push(pk.o);
+      const r = refine(rel, cands, pk.o);
+      if (!best || r.matched > best.matched) best = r;
     }
-    let matched = 0;
-    for (const r of rel) {
-      const c = nearest(cands, o + r);
-      if (c != null && Math.abs(c - (o + r)) <= TOL) matched++;
-    }
-    return { o, matched, plays: rel.length, span: rel[rel.length - 1] };
+    const { o, matched, last } = best;
+    return { o, matched, last, plays: rel.length, span: rel[rel.length - 1] };
   }
 
   // frames + plays -> anchors [{ w, b, auto }] (one per stretch between breaks) and a summary.
@@ -133,13 +150,36 @@ var E22Bcast = (function () {
     const end = duration || (frames.length ? frames[frames.length - 1].t : 0);
     const anchors = [];
     const detail = [];
-    let prev = null; // { endB, endW }
+    let prev = null; // { endB, endW }: broadcast and wall time of the last play that lined up
     let found = 0;
+    // A placed stretch can still hide a short cut (a review, an injury stop). Plays after the
+    // last one that lined up get their own fit, in the window the cut allows; repeat.
+    const place = (seg, fit) => {
+      anchors.push({ w: seg[0].snapAt, b: +fit.o.toFixed(3), auto: true });
+      found += fit.matched;
+      let at = { endB: fit.o + (seg[fit.last].snapAt - seg[0].snapAt) / 1000, endW: seg[fit.last].snapAt };
+      let rest = seg.slice(fit.last + 1);
+      while (rest.length >= 2) {
+        const lo = at.endB + 3;
+        const hi = at.endB + (rest[0].snapAt - at.endW) / 1000 + 3;
+        const f = fitSegment(rest, cands, lo, hi);
+        if (!f || f.matched < Math.max(2, Math.ceil(rest.length * 0.4))) break;
+        // Only worth an anchor if it really moved from where the stretch's own fit puts it.
+        const before = anchors[anchors.length - 1];
+        const predicted = before.b + (rest[0].snapAt - before.w) / 1000;
+        if (Math.abs(f.o - predicted) > 2 * TOL) anchors.push({ w: rest[0].snapAt, b: +f.o.toFixed(3), auto: true, cut: true });
+        found += f.matched;
+        at = { endB: f.o + (rest[f.last].snapAt - rest[0].snapAt) / 1000, endW: rest[f.last].snapAt };
+        rest = rest.slice(f.last + 1);
+      }
+      return at;
+    };
     for (const seg of segs) {
       let lo = 0, hi = end;
       if (prev) {
         lo = prev.endB + 5;
-        hi = lo + (seg[0].snapAt - prev.endW) / 1000 + 30;
+        // The replay only removes time, so the gap can't be longer than it was live.
+        hi = prev.endB + (seg[0].snapAt - prev.endW) / 1000 + 8;
       }
       const fit = fitSegment(seg, cands, lo, hi);
       // At least 3 plays (and 40% of the stretch) must line up; short stretches are left to
@@ -147,18 +187,15 @@ var E22Bcast = (function () {
       const ok = !!fit && seg.length >= 3 && fit.matched >= Math.max(3, Math.ceil(seg.length * 0.4));
       detail.push({ first: seg[0].id, plays: seg.length, matched: fit ? fit.matched : 0, offset: fit ? +fit.o.toFixed(2) : null, ok });
       if (ok) {
-        anchors.push({ w: seg[0].snapAt, b: +fit.o.toFixed(3), auto: true });
-        found += fit.matched;
-        prev = { endB: fit.o + fit.span, endW: seg[seg.length - 1].snapAt };
-      } else if (prev) {
-        // Unplaced stretch: carry the search window forward past it.
-        prev = { endB: prev.endB, endW: prev.endW };
+        prev = place(seg, fit);
+        detail[detail.length - 1].endB = prev.endB;
       }
+      // An unplaced stretch leaves prev alone, so the next search window spans it too.
     }
     // Second pass: a stretch left unplaced sits between two placed ones, which pins it into a
     // narrow window (after the previous stretch, early enough for the next one to fit). Inside
     // that window two matching snaps are enough.
-    const fits = segs.map((seg, k) => (detail[k].ok ? { o: detail[k].offset, span: (seg[seg.length - 1].snapAt - seg[0].snapAt) / 1000 } : null));
+    const fits = segs.map((seg, k) => (detail[k].ok ? { o: detail[k].offset, endB: detail[k].endB } : null));
     for (let k = 0; k < segs.length; k++) {
       if (fits[k]) continue;
       const seg = segs[k];
@@ -166,14 +203,12 @@ var E22Bcast = (function () {
       let q = k + 1; while (q < segs.length && !fits[q]) q++;
       if (p < 0 || q >= segs.length) continue;
       const span = (seg[seg.length - 1].snapAt - seg[0].snapAt) / 1000;
-      const lo = fits[p].o + fits[p].span + 5;
+      const lo = fits[p].endB + 5;
       const hi = fits[q].o - span - 5;
       if (hi < lo) continue;
       const fit = fitSegment(seg, cands, lo, hi);
       if (fit && fit.matched >= Math.min(2, seg.length) && fit.matched >= Math.ceil(seg.length * 0.3)) {
-        fits[k] = { o: fit.o, span };
-        anchors.push({ w: seg[0].snapAt, b: +fit.o.toFixed(3), auto: true });
-        found += fit.matched;
+        fits[k] = { o: fit.o, endB: place(seg, fit).endB };
         Object.assign(detail[k], { matched: fit.matched, offset: +fit.o.toFixed(2), ok: true, narrow: true });
       }
     }
@@ -185,6 +220,6 @@ var E22Bcast = (function () {
     };
   }
 
-  return { findSnaps, segments, fitSegment, build, BREAK_GAP };
+  return { findSnaps, segments, fitSegment, build, BREAK_GAP, SPLIT_GAP };
 })();
 if (typeof module !== 'undefined') module.exports = E22Bcast;
