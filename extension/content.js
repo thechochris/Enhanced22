@@ -295,8 +295,12 @@
     // the broadcast just before the next snap and wait there until that play starts.
     let waitNext = false;
     if (w != null) {
-      const next = state.plays.slice(i + 1).find((p) => p.snapAt);
-      const stop = next ? next.snapAt - E22Auto.SNAP_LEAD * 1000 : Infinity; // where the next play's film usually begins
+      const j = state.plays.findIndex((p, k) => k > i && p.snapAt);
+      const next = j >= 0 ? state.plays[j] : null;
+      // Where the next play's film begins (its own lead when it has a mark).
+      const nm = next ? markOf(j) : null;
+      const lead = nm && typeof nm.s === 'number' && typeof nm.snap === 'number' && nm.snap >= nm.s ? nm.snap - nm.s : E22Auto.SNAP_LEAD;
+      const stop = next ? next.snapAt - lead * 1000 : Infinity;
       if (next && w > stop) { w = stop; waitNext = true; }
     }
     const holding = hold.index != null;

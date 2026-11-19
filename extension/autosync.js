@@ -197,19 +197,45 @@ var E22Auto = (function () {
     }
     if (hi - lo < 0.08) return null; // no clear two-angle structure
     const thr = (lo + hi) / 2;
-    const margin = (hi - lo) * 0.15;
+    // Openings this close to the middle are ambiguous (a wider sideline shot on a punt, or the
+    // red zone, where both cameras look alike); those follow alternation instead.
+    const margin = (hi - lo) * 0.35;
 
-    let cur = frames[0].horiz >= thr ? 'E' : 'S';
+    // The view only changes at a cut. A sideline camera that pans to follow a long pass can
+    // drift into the end zone range on its own, and that must not end the sideline view. So the
+    // film is split at cuts (a jump in the picture or in line direction, a fade, or a spot the
+    // scan skipped over), and each shot is labeled by how it opens: the teams lining up, before
+    // any pan.
+    const isCut = frames.map((f, k) => {
+      if (!k) return true;
+      const p = frames[k - 1];
+      if (f.t - p.t > 0.5) return true;
+      if ((f.luma < 0.05) !== (p.luma < 0.05)) return true;
+      if (Math.abs(f.horiz - p.horiz) > 0.12) return true;
+      const around = [];
+      for (let j = Math.max(1, k - 12); j < Math.min(frames.length, k + 13); j++) if (j !== k) around.push(frames[j].diff);
+      return f.diff > 0.025 && f.diff > 5 * median(around) + 0.004;
+    });
     let runs = [];
-    for (let k = 0; k < frames.length; k++) {
-      const f = frames[k];
-      if (f.luma >= 0.05) {
-        if (cur === 'S' && f.horiz > thr + margin) cur = 'E';
-        else if (cur === 'E' && f.horiz < thr - margin) cur = 'S';
+    let cur = frames[0].horiz >= thr ? 'E' : 'S';
+    for (let i = 0; i < frames.length;) {
+      let j = i + 1;
+      while (j < frames.length && !isCut[j]) j++;
+      const t0 = frames[i].t;
+      const lit = (lo, hi) => frames.slice(i, j).filter((f) => f.luma >= 0.05 && f.t >= lo && f.t <= hi).map((f) => f.horiz);
+      let hs = lit(t0 + 0.2, t0 + 1.7);
+      if (hs.length < 2) hs = lit(t0, Infinity);
+      if (hs.length) {
+        const h = median(hs);
+        if (h > thr + margin) cur = 'E';
+        else if (h < thr - margin) cur = 'S';
+        // In between (a wider sideline shot, say on a punt): the views alternate.
+        else if (frames[j - 1].t - t0 >= 6) cur = cur === 'E' ? 'S' : 'E';
       }
       const last = runs[runs.length - 1];
-      if (last && last.label === cur) { last.j = k; continue; }
-      runs.push({ label: cur, i: k, j: k });
+      if (last && last.label === cur) last.j = j - 1;
+      else runs.push({ label: cur, i, j: j - 1 });
+      i = j;
     }
     // Boundary between frame k-1 and k: the middle of any gap the fast scan jumped over.
     // When the change happened inside a gap the scan skipped over, a sideline shot is placed at
@@ -286,11 +312,19 @@ var E22Auto = (function () {
   // Seconds from the start of the sideline view to the snap when it can't be seen in the film.
   // The view opens on the teams lining up; on a full game the snap came a median 4.5 s in.
   const SNAP_LEAD = 4.5;
-  const SNAP_VERSION = 3; // bump when matching or snap placement changes, so saved marks get redone
+  const SNAP_VERSION = 4; // bump when matching or snap placement changes, so saved marks get redone
+
+  // The sideline view ends a few seconds after the whistle: on a full game the time from the
+  // end of the play to the end of the view was 3-4.5 s (median 3.7), while the time from the
+  // start of the view to the snap ranged from 3 to 17 s. So the end is the better guide.
+  const AFTER_PLAY = 3.7;
+  const SNAP_FIT = 0.2; // match cost bonus/penalty for a film snap that fits the play's length
 
   // The snap inside a sideline clip: the picture is nearly still while the teams are set,
   // then everything starts moving and keeps moving. Returns seconds after the clip start.
-  function findSnapIn(frames, c) {
+  // With the play's length known (dur), the onset that leaves about AFTER_PLAY seconds after
+  // the play wins; otherwise the first onset 2.5-7 s in.
+  function onsetsIn(frames, c) {
     const B = 0.25;
     const bins = [];
     let k = 0;
@@ -302,7 +336,8 @@ var E22Auto = (function () {
     }
     const ok = (xs) => xs.filter((x) => x != null);
     const avg = (xs) => { const v = ok(xs); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
-    for (let i = 4; i < Math.min(bins.length - 6, 40); i++) {
+    const onsets = [];
+    for (let i = 4; i < bins.length - 6; i++) {
       const pre = ok(bins.slice(Math.max(1, i - 6), i));
       if (pre.length < 3) continue;
       const base = median(pre);
@@ -311,13 +346,43 @@ var E22Auto = (function () {
       if (post == null || longer == null) continue;
       if (base <= 0.0008 && post >= Math.max(2 * base, base + 0.0004) && longer >= 1.6 * base) {
         const lead = i * B;
-        // Outside the usual range it's more likely pre-snap motion or a replay than the snap.
-        return lead >= 2.5 && lead <= 7 ? lead : null;
+        if (onsets.length && lead - onsets[onsets.length - 1].last <= 1) { onsets[onsets.length - 1].last = lead; continue; }
+        onsets.push({ lead, last: lead });
       }
     }
-    return null;
+    return onsets;
   }
-  const snapFor = (frames, c, end) => Math.min(c.s + (findSnapIn(frames, c) ?? SNAP_LEAD), c.s + (end - c.s) * 0.7);
+  // The onset that leaves about AFTER_PLAY seconds after a play of length dur, or null.
+  function onsetFor(onsets, len, dur) {
+    let best = null;
+    for (const o of onsets) {
+      const after = len - o.lead - dur;
+      if (after < 2.2 || after > 5.2) continue;
+      if (!best || Math.abs(after - AFTER_PLAY) < Math.abs(best.after - AFTER_PLAY)) best = { lead: o.lead, after };
+    }
+    return best;
+  }
+
+  function findSnapIn(frames, c, { dur = null, end = c.e, onsets = null } = {}) {
+    onsets = onsets || onsetsIn(frames, c);
+    if (dur) {
+      const best = onsetFor(onsets, end - c.s, dur);
+      return best ? best.lead : null;
+    }
+    const first = onsets.find((o) => o.lead >= 2.5 && o.lead <= 7);
+    return first ? first.lead : null;
+  }
+  // Where the snap is when no onset is clear: from the end of the view when the play's length
+  // is known, else the usual lead.
+  function snapFor(frames, c, end, dur) {
+    const found = findSnapIn(frames, c, { dur, end, onsets: c.onsets });
+    if (found != null) return c.s + found;
+    if (dur) {
+      const lead = end - c.s - dur - AFTER_PLAY;
+      if (lead >= 1) return c.s + Math.min(lead, (end - c.s) * 0.8);
+    }
+    return Math.min(c.s + SNAP_LEAD, c.s + (end - c.s) * 0.7);
+  }
   // Median frame difference over a clip's first second above which it opened mid-motion.
   // Real sideline views mostly measure 0.0001-0.0012, flips inside replays 0.0007-0.0038;
   // short clips (under 4 s) use half the threshold.
@@ -353,8 +418,16 @@ var E22Auto = (function () {
       if (j in fixed) return hits(clips[i], fixed[j]) ? -10 : 10;
       if (fixedAt.some(([, t]) => hits(clips[i], t))) return 10;
       const d = durs[j];
-      const base = d == null ? 0.4 : Math.min(1.2, Math.abs(dur - (d + pad)) / 8);
+      let base = d == null ? 0.4 : Math.min(1.2, Math.abs(dur - (d + pad)) / 8);
       const pre = isPreSnap(plays[j]) ? 0.8 : 0;
+      // The film's own snap: the view ends a few seconds after the play, so a play of the
+      // right length leaves about AFTER_PLAY seconds after a still-then-moving onset. The time
+      // before the snap varies a lot, so this says more than the clip's length does.
+      let snapFit = 0;
+      if (d != null && dur === clips[i].dur && clips[i].onsets && clips[i].onsets.length) {
+        snapFit = onsetFor(clips[i].onsets, clips[i].dur, d) ? -SNAP_FIT : SNAP_FIT;
+      }
+      base += snapFit;
       // Kickoffs open with the kicking team already running, so only other plays need a still start.
       return base + pre + (clips[i].moving && plays[j].type !== 'kickoff' ? 0.5 : 0);
     };
@@ -431,6 +504,7 @@ var E22Auto = (function () {
       // If most clips look like that, the film isn't a still sideline camera; don't use it.
       if (clips.filter((c) => c.moving).length > clips.length / 3) for (const c of clips) c.moving = false;
     }
+    for (const c of clips) c.onsets = onsetsIn(frames, c);
     // In a partial scan the last sideline clip may be cut off; drop it so it is redone on resume.
     if (partial && clips.length && shots.length && shots[shots.length - 1].label === 'S') clips = clips.slice(0, -1);
     const { matches, extended, pad, lastPlay } = align(clips, plays, { openEnd: partial, fixed });
@@ -440,9 +514,9 @@ var E22Auto = (function () {
       const c = matches.has(j) ? clips[matches.get(j)] : null;
       if (!c) { marks[p.id] = { skip: true, auto: true }; return; }
       const c2 = extended.has(j) ? clips[extended.get(j)] : null;
-      if (c2) { marks[p.id] = { s: c.s, e: c2.e, snap: snapFor(frames, c, c2.e), sv: SNAP_VERSION, auto: true }; return; }
+      if (c2) { marks[p.id] = { s: c.s, e: c2.e, snap: snapFor(frames, c, c2.e, playDuration(p)), sv: SNAP_VERSION, auto: true }; return; }
       // The sideline view opens a few seconds before the snap, on the teams lining up.
-      marks[p.id] = { s: c.s, e: c.e, snap: snapFor(frames, c, c.e), sv: SNAP_VERSION, auto: true };
+      marks[p.id] = { s: c.s, e: c.e, snap: snapFor(frames, c, c.e, playDuration(p)), sv: SNAP_VERSION, auto: true };
     });
     const alternating = shots.slice(1).filter((x, k) => x.label !== shots[k].label).length / Math.max(1, shots.length - 1);
     return {
@@ -455,6 +529,6 @@ var E22Auto = (function () {
     };
   }
 
-  return { W, H, features, gridDiff, scan, segmentByAngle, findShots, labelShots, clipsFrom, align, build, findSnapIn, SNAP_LEAD, SNAP_VERSION };
+  return { W, H, features, gridDiff, scan, segmentByAngle, findShots, labelShots, clipsFrom, align, build, findSnapIn, snapFor, playDuration, SNAP_LEAD, SNAP_VERSION, AFTER_PLAY };
 })();
 if (typeof module !== 'undefined') module.exports = E22Auto;
