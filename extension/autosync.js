@@ -216,17 +216,55 @@ var E22Auto = (function () {
       for (let j = Math.max(1, k - 12); j < Math.min(frames.length, k + 13); j++) if (j !== k) around.push(frames[j].diff);
       return f.diff > 0.025 && f.diff > 5 * median(around) + 0.004;
     });
-    let runs = [];
-    let cur = frames[0].horiz >= thr ? 'E' : 'S';
+    // The shots between cuts, with how each opens.
+    const shots = [];
     for (let i = 0; i < frames.length;) {
       let j = i + 1;
       while (j < frames.length && !isCut[j]) j++;
       const t0 = frames[i].t;
+      const t1 = j < frames.length ? frames[j].t : frames[j - 1].t;
       const lit = (lo, hi) => frames.slice(i, j).filter((f) => f.luma >= 0.05 && f.t >= lo && f.t <= hi).map((f) => f.horiz);
       let hs = lit(t0 + 0.2, t0 + 1.7);
       if (hs.length < 2) hs = lit(t0, Infinity);
-      if (hs.length) {
-        const h = median(hs);
+      const prev = shots[shots.length - 1];
+      // A flicker of a second or so belongs to the shot before it (its length counts there).
+      if (prev && t1 - t0 < 1.5) { prev.j = j; prev.len += t1 - t0; }
+      else shots.push({ i, j, t0, len: t1 - t0, h: hs.length ? median(hs) : null });
+      i = j;
+    }
+    // The replay shows each play twice, sideline then end zone, and both views run exactly as
+    // long. Two neighbouring shots of the same length (to a fraction of a second) are such a
+    // pair, and the one whose lines run more upright is the end zone view. That settles games
+    // where some end zone views open looking much like a sideline view.
+    const PAIR_TOL = 0.2;
+    const same = (x, y) => x && y && x.len >= 4 && y.len >= 4 && Math.abs(x.len - y.len) <= PAIR_TOL;
+    // A pair is (sideline, end zone) unless the first clearly opens as an end zone view and the
+    // second lower: then it's one play's end zone view and the next play's sideline view that
+    // happen to run as long.
+    const backwards = (x, y) => x.h != null && y.h != null && x.h > thr + margin && x.h - y.h > 0.05;
+    for (let k = 0; k + 1 < shots.length;) {
+      let r1 = k;
+      while (r1 + 1 < shots.length && same(shots[r1], shots[r1 + 1])) r1++;
+      const m = r1 - k + 1;
+      if (m >= 2) {
+        // A run of equal shots: several plays of the same length in a row. With an odd count,
+        // pick the split where the second of each pair opens more like an end zone view.
+        const score = (off) => { let sc = 0; for (let q = k + off; q + 1 <= r1; q += 2) sc += (shots[q + 1].h ?? 0) - (shots[q].h ?? 0); return sc; };
+        const off = m % 2 === 0 || score(0) >= score(1) ? 0 : 1;
+        for (let q = k + off; q + 1 <= r1; q += 2) {
+          if (backwards(shots[q], shots[q + 1])) continue;
+          shots[q].pair = 'S'; shots[q + 1].pair = 'E';
+        }
+      }
+      k = r1 + 1;
+    }
+    let runs = [];
+    let cur = frames[0].horiz >= thr ? 'E' : 'S';
+    for (const shot of shots) {
+      const { i, j, t0 } = shot;
+      if (shot.pair) cur = shot.pair;
+      else if (shot.h != null) {
+        const h = shot.h;
         if (h > thr + margin) cur = 'E';
         else if (h < thr - margin) cur = 'S';
         // In between (a wider sideline shot, say on a punt): the views alternate.
@@ -235,7 +273,6 @@ var E22Auto = (function () {
       const last = runs[runs.length - 1];
       if (last && last.label === cur) last.j = j - 1;
       else runs.push({ label: cur, i, j: j - 1 });
-      i = j;
     }
     // Boundary between frame k-1 and k: the middle of any gap the fast scan jumped over.
     // When the change happened inside a gap the scan skipped over, a sideline shot is placed at
@@ -312,7 +349,7 @@ var E22Auto = (function () {
   // Seconds from the start of the sideline view to the snap when it can't be seen in the film.
   // The view opens on the teams lining up; on a full game the snap came a median 4.5 s in.
   const SNAP_LEAD = 4.5;
-  const SNAP_VERSION = 5; // bump when matching or snap placement changes, so saved marks get redone
+  const SNAP_VERSION = 6; // bump when matching or snap placement changes, so saved marks get redone
 
   // The sideline view ends a few seconds after the whistle: on a full game the time from the
   // end of the play to the end of the view was 3-4.5 s (median 3.7), while the time from the
