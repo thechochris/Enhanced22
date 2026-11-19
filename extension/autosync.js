@@ -312,12 +312,13 @@ var E22Auto = (function () {
   // Seconds from the start of the sideline view to the snap when it can't be seen in the film.
   // The view opens on the teams lining up; on a full game the snap came a median 4.5 s in.
   const SNAP_LEAD = 4.5;
-  const SNAP_VERSION = 4; // bump when matching or snap placement changes, so saved marks get redone
+  const SNAP_VERSION = 5; // bump when matching or snap placement changes, so saved marks get redone
 
   // The sideline view ends a few seconds after the whistle: on a full game the time from the
   // end of the play to the end of the view was 3-4.5 s (median 3.7), while the time from the
   // start of the view to the snap ranged from 3 to 17 s. So the end is the better guide.
   const AFTER_PLAY = 3.7;
+  const GUESS_DUR = 5; // play length assumed when the play-by-play has none
   const SNAP_FIT = 0.2; // match cost bonus/penalty for a film snap that fits the play's length
 
   // The snap inside a sideline clip: the picture is nearly still while the teams are set,
@@ -370,7 +371,10 @@ var E22Auto = (function () {
       return best ? best.lead : null;
     }
     const first = onsets.find((o) => o.lead >= 2.5 && o.lead <= 7);
-    return first ? first.lead : null;
+    if (first) return first.lead;
+    // No length (penalties before the snap, some kicks): a later onset that fits a short play.
+    const guess = onsetFor(onsets, end - c.s, GUESS_DUR);
+    return guess ? guess.lead : null;
   }
   // Where the snap is when no onset is clear: from the end of the view when the play's length
   // is known, else the usual lead.

@@ -356,13 +356,15 @@
     return { cut, n };
   }
   let lastEstimated = false;
-  function broadcastTimeFor(w) {
+  function broadcastTimeFor(w, snapW = null) {
     lastEstimated = false;
     if (!state.anchors.length || w == null) return null;
     const sorted = [...state.anchors].sort((a, b) => a.w - b.w);
     let a = null;
-    // A correction point belongs to its play, including the moments just before the snap.
-    for (const x of sorted) if (x.w <= w + 1500) a = x;
+    // A correction point belongs to its play, including the moments just before the snap
+    // (the whole clip when we know which play is showing), so the audio doesn't jump at the snap.
+    const upTo = Math.max(w, snapW != null && snapW - w < 30000 ? snapW : -Infinity) + 1500;
+    for (const x of sorted) if (x.w <= upTo) a = x;
     if (a) {
       const { cut, n } = cutBetween(a.w, w);
       lastEstimated = n > 0;
@@ -397,7 +399,8 @@
     if (document.visibilityState === 'visible' && document.hasFocus()) return;
     // Where the All-22 is *now*: the message is a few milliseconds old by the time it lands.
     const age = msg.playing && msg.sentAt ? Math.min(1000, Math.max(0, Date.now() - msg.sentAt)) : 0;
-    const b = broadcastTimeFor(msg.w == null ? null : msg.w + age * (msg.rate || 1));
+    const shown = msg.playIndex >= 0 ? state.plays[msg.playIndex] : null;
+    const b = broadcastTimeFor(msg.w == null ? null : msg.w + age * (msg.rate || 1), shown?.snapAt ?? null);
     if (b == null) { followStatus = state.anchors.length ? 'waiting for a synced play' : 'no anchor yet: press B at a snap'; if (!v.paused) v.pause(); return; }
     if (!msg.playing) {
       // Not playing: park the broadcast at the target spot so it buffers there in advance.
@@ -801,21 +804,127 @@
     root.addEventListener('mouseup', () => { const a = root.activeElement; if (a?.blur && !(a.tagName === 'INPUT' && a.type !== 'checkbox') && a.tagName !== 'SELECT') a.blur(); });
   }
 
+  // In full screen the browser shows only the full-screen element (in the "top layer"), so
+  // anything outside it is hidden, however high its z-index. The overlay therefore joins the
+  // top layer itself, as a popover shown after the full-screen element, which puts it above
+  // whatever went full screen: the player's container, the bare video, or the whole page.
+  // Browsers without popovers fall back to moving the overlay inside the full-screen element.
+  const canPopover = typeof HTMLElement.prototype.showPopover === 'function';
+  let fsSeen = null;
+  const fsLog = [];
+  function describe(n) {
+    if (!n) return null;
+    if (n === document.documentElement) return 'html';
+    const cls = typeof n.className === 'string' && n.className ? `.${n.className.trim().split(/\s+/).slice(0, 3).join('.')}` : '';
+    return `${n.tagName.toLowerCase()}${n.id ? `#${n.id}` : ''}${cls}${n.shadowRoot ? ' (shadow)' : ''}`;
+  }
+  function fullscreenNow() {
+    let fs = document.fullscreenElement || document.webkitFullscreenElement || null;
+    while (fs && fs.shadowRoot && fs.shadowRoot.fullscreenElement) fs = fs.shadowRoot.fullscreenElement;
+    return fs;
+  }
   function placeHost() {
     const v = state.video;
     if (!v || !host) return;
-    // In full screen the browser shows only the full-screen element, so the overlay must live
-    // inside it. Players usually put a container in full screen (the page-side helper turns a
-    // bare-video request into that); anything else full screen still gets the overlay, since
-    // drawing it outside would hide it.
-    let fs = document.fullscreenElement;
-    while (fs && fs.shadowRoot && fs.shadowRoot.fullscreenElement) fs = fs.shadowRoot.fullscreenElement;
-    const parent = fs && fs !== v && !(fs instanceof HTMLVideoElement) && !(fs instanceof HTMLIFrameElement) ? fs : document.documentElement;
-    if (host.parentNode !== parent) parent.appendChild(host);
+    const fs = fullscreenNow();
+    // Inside the full-screen element the overlay can be clicked (the browser blocks clicks on
+    // anything outside it). A bare video can't hold children, and a web component shows only
+    // what its shadow root lays out, so those get the closest place that works.
+    let target = document.documentElement;
+    if (fs && !(fs instanceof HTMLIFrameElement)) {
+      if (fs instanceof HTMLVideoElement) target = document.documentElement;
+      else if (fs.shadowRoot) target = fs.shadowRoot;
+      else target = fs;
+    }
+    if (host.parentNode !== target) keepScroll(() => target.appendChild(host));
+    if (canPopover) {
+      if (fs) {
+        if (!host.hasAttribute('popover')) keepScroll(() => host.setAttribute('popover', 'manual'));
+        // Shown after the full-screen element, so the overlay draws on top of it.
+        if (fs !== fsSeen || !host.matches(':popover-open')) {
+          keepScroll(() => {
+            try { if (host.matches(':popover-open')) host.hidePopover(); host.showPopover(); } catch (e) { logFs('popover failed', e.message); }
+          });
+        }
+      } else if (host.hasAttribute('popover')) {
+        keepScroll(() => {
+          try { if (host.matches(':popover-open')) host.hidePopover(); } catch { /* already closed */ }
+          host.removeAttribute('popover');
+        });
+      }
+    }
+    if (fs !== fsSeen) { fsSeen = fs; logFs(fs ? 'entered' : 'left'); if (fs) setTimeout(() => logFs('a moment later'), 800); }
     const r = v.getBoundingClientRect();
     Object.assign(host.style, {
       top: `${r.top}px`, left: `${r.left}px`, width: `${r.width}px`, height: `${r.height}px`,
+      right: 'auto', bottom: 'auto', margin: '0', border: '0', padding: '0', background: 'transparent', overflow: 'visible',
     });
+    keepOnScreen(el.panel);
+    keepOnScreen(el.bug);
+  }
+  // A panel dragged beside the video (allowed, so it can sit next to a small player) ends up
+  // off screen when the video fills the screen. Nudge it back into view for as long as it
+  // would be off screen, without changing where you put it.
+  function keepOnScreen(node) {
+    if (!node || node.classList.contains('hidden')) return;
+    const prev = node.style.translate || '';
+    node.style.translate = '';
+    const r = node.getBoundingClientRect();
+    if (!r.width) { node.style.translate = prev; return; }
+    const W = window.innerWidth, H = window.innerHeight;
+    let dx = 0, dy = 0;
+    if (r.right > W) dx = W - r.right - 8;
+    if (r.left + dx < 0) dx = -r.left + 8;
+    if (r.bottom > H) dy = H - r.bottom - 8;
+    if (r.top + dy < 0) dy = -r.top + 8;
+    node.style.translate = dx || dy ? `${Math.round(dx)}px ${Math.round(dy)}px` : '';
+    if (node === el.panel) node.style.maxHeight = `${H - 16}px`;
+  }
+  // Moving or re-showing the overlay resets the play list's scroll, so put it back where it was
+  // (or, if the play on screen would be out of view, with that play a third of the way down).
+  // The position is remembered from the last time the list was laid out, since a hidden list
+  // reads as scrolled to the top.
+  let listScroll = 0;
+  let listScrollHold = 0;
+  function keepScroll(fn) {
+    const list = el.list;
+    if (list && list.clientHeight > 0 && performance.now() > listScrollHold) listScroll = list.scrollTop;
+    fn();
+    if (!list) return;
+    listScrollHold = performance.now() + 400; // ignore the reset this move causes
+    const top = listScroll;
+    const restore = () => {
+      if (list.clientHeight === 0) return;
+      list.scrollTop = top;
+      const row = highlighted;
+      if (row && row.isConnected && !row.classList.contains('hidden')) {
+        const lr = list.getBoundingClientRect(), rr = row.getBoundingClientRect();
+        if (lr.height > 0 && (rr.top < lr.top || rr.bottom > lr.bottom)) list.scrollTop += rr.top - lr.top - lr.height / 3;
+      }
+    };
+    restore();
+    requestAnimationFrame(restore); // after layout comes back
+    setTimeout(restore, 150);
+  }
+  // What full screen looked like, for the diagnostics report.
+  function logFs(what, detail) {
+    const fs = fullscreenNow();
+    const v = state.video;
+    const r = v ? v.getBoundingClientRect() : null;
+    let onTop = null;
+    if (fs && el.panel) {
+      const pr = el.panel.getBoundingClientRect();
+      const hit = document.elementFromPoint(pr.left + 10, pr.top + 10);
+      onTop = hit === host ? 'overlay' : describe(hit);
+    }
+    fsLog.push({
+      at: new Date().toISOString().slice(11, 19), what, detail: detail || undefined,
+      element: describe(fs), overlayIn: describe(host?.parentNode?.host || host?.parentNode), containsVideo: fs && v ? fs.contains(v) : null, isVideo: fs === v,
+      popover: canPopover ? host?.matches?.(':popover-open') : 'unsupported',
+      video: r ? [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)] : null,
+      screen: [innerWidth, innerHeight], onTop,
+    });
+    if (fsLog.length > 20) fsLog.shift();
   }
 
   let toastTimer = null;
@@ -1572,6 +1681,7 @@
       autoSync: state.lastAutoSummary || null,
       audio: { isAudioTab: state.isAudioTab, anchors: state.anchors.length, offset: state.audioOffset, status: followStatus, lastDrive: state.lastDrive },
       videos: vids,
+      fullscreen: { now: describe(fullscreenNow()), log: fsLog },
       mediaEvents,
       manifests,
       resources: resources.map(stripUrl),

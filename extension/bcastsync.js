@@ -239,6 +239,45 @@ var E22Bcast = (function () {
       detail.push(d);
     });
     anchors.sort((x, y) => x.w - y.w);
+    // Each play's own snap. The play-by-play's snap times are off by a few seconds now and
+    // then (a pass logged 12 s early, say), which a stretch-wide offset can't fix. Where the
+    // broadcast shows a snap near where the stretch puts a play, and that snap is closer to
+    // this play than to any other, the play gets its own anchor at that snap.
+    const NEAR = 15;
+    const placedPlays = [];
+    segs.forEach((seg, k) => { if (chosen.has(k)) placedPlays.push(...seg); });
+    const est = (p) => {
+      let a = null;
+      for (const x of anchors) if (x.w <= p.snapAt + 1500) a = x;
+      return a ? a.b + (p.snapAt - a.w) / 1000 : null;
+    };
+    const ests = placedPlays.map((p) => ({ p, e: est(p) })).filter((x) => x.e != null);
+    const nearestPlay = (c) => {
+      let best = null;
+      for (const x of ests) if (!best || Math.abs(x.e - c) < Math.abs(best.e - c)) best = x;
+      return best;
+    };
+    const own = [];
+    for (const x of ests) {
+      if (x.p.type === 'kickoff') continue; // kickoff times and pictures are too loose
+      let c = nearest(cands, x.e);
+      if (c == null || Math.abs(c - x.e) > NEAR) continue;
+      if (nearestPlay(c) !== x) continue;
+      own.push({ w: x.p.snapAt, b: +c.toFixed(3), auto: true, play: true, moved: +(c - x.e).toFixed(2) });
+    }
+    // Keep them in order: a snap can't come before the previous play's.
+    const kept = [];
+    for (const a of own.sort((x, y) => x.w - y.w)) {
+      const prev = kept[kept.length - 1];
+      if (prev && a.b < prev.b + 3) continue;
+      kept.push(a);
+    }
+    for (const a of kept) {
+      const same = anchors.findIndex((x) => x.w === a.w);
+      if (same >= 0) anchors[same] = { ...anchors[same], b: a.b, play: true };
+      else anchors.push(a);
+    }
+    anchors.sort((x, y) => x.w - y.w);
     return {
       anchors,
       summary: { candidates: cands.length, segments: segs.length, placed: anchors.length, playsMatched: found, plays: segs.reduce((n, s) => n + s.length, 0) },
