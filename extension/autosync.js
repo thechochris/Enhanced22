@@ -373,7 +373,7 @@ var E22Auto = (function () {
         const tail = (x) => (clips[x].dur < 8 ? -0.2 : 0.4);
         const span = (a, b) => clips[b].e - clips[a].s;
         const pinned = (x) => fixedAt.some(([jj, t]) => jj !== j - 1 && hits(clips[x], t));
-        const k = isKick[j - 1] && i >= 2 && !pinned(i - 1)
+        const k = isKick[j - 1] && i >= 2 && clips[i - 1].dur < 8 && !pinned(i - 1)
           ? D[i - 2][j - 1] + matchCost(i - 2, j - 1, span(i - 2, i - 1)) + tail(i - 1) : Infinity;
         const k3 = isKick[j - 1] && i >= 3 && clips[i - 1].dur < 4 && !pinned(i - 1) && !pinned(i - 2)
           ? D[i - 3][j - 1] + matchCost(i - 3, j - 1, span(i - 3, i - 1)) + tail(i - 2) + tail(i - 1) : Infinity;
