@@ -578,10 +578,19 @@
     .panel header { padding: 8px 10px; font-size: 13px; font-weight: 600; border-bottom: 1px solid #2a3245;
       cursor: move; user-select: none; }
     .titlebar { display: flex; align-items: center; gap: 6px; }
-    .titlebar .title { flex: 1; }
+    .titlebar .title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .titlebar .change { white-space: nowrap; }
     .grip { color: #9aa6bd; }
     .change { font: inherit; font-size: 11px; color: #9ec0ff; background: none; border: 0; cursor: pointer; padding: 0; }
     .change:hover { text-decoration: underline; }
+    .sec { font: inherit; font-size: 11px; font-weight: 600; color: #9aa6bd; background: rgba(255,255,255,.06);
+      border: 1px solid #2a3245; border-radius: 4px; cursor: pointer; padding: 1px 6px; }
+    .sec[aria-pressed="true"] { color: #fff; background: #2f6fed; border-color: #2f6fed; }
+    .sec:hover { border-color: #9ec0ff; }
+    .panel.no-ctl .ctl { display: none; }
+    .panel.no-plays .searchbar, .panel.no-plays .list, .panel.no-plays .resize { display: none; }
+    .panel.no-plays { height: auto !important; bottom: auto !important; }
+    .panel.no-plays header { border-bottom: 0; }
     .bug { pointer-events: auto; cursor: move; user-select: none; }
     .picker { padding: 10px; font-size: 12px; }
     .picker p { margin: 0 0 8px; color: #cfd6e4; line-height: 1.4; }
@@ -659,7 +668,10 @@
         <div class="toast"></div>
         <div class="panel">
           <header><div class="titlebar"><span class="grip" title="Drag to move">⠿</span><div class="title">Enhanced22</div>
-              <button class="change" title="Choose a different game">Change game</button></div><div class="sub"></div>
+              <button class="change" title="Choose a different game">Change game</button>
+              <button class="sec" data-sec="hideCtl" title="Hide or show the controls">Controls</button>
+              <button class="sec" data-sec="hidePlays" title="Hide or show the search and play list">Plays</button></div>
+            <div class="ctl"><div class="sub"></div>
             <button class="audiosrc" title="Use this tab as the broadcast audio source">Use this tab for broadcast audio</button>
             <div class="toggles">
               <label><input type="checkbox" data-pref="autoSkip"> Auto-skip end zone view</label>
@@ -677,7 +689,7 @@
  <button data-act="export" title="Save the auto-sync scan to a file you can send to the developer">Export sync data</button>
               <button data-act="diag" title="Copy technical details about this player to send to the developer">Copy diagnostics</button>
             </div>
-            <div class="status"></div></header>
+            <div class="status"></div></div></header>
           <div class="searchbar"><input class="search" type="search" placeholder="Search plays: player, team, touchdown, field goal…" aria-label="Search plays"><span class="scount"></span></div>
           <div class="list"></div>
           <div class="resize" title="Drag to resize · double-click to reset"></div>
@@ -778,6 +790,12 @@
     root.querySelectorAll('input[data-pref]').forEach((cb) => {
       cb.addEventListener('change', () => { state.prefs[cb.dataset.pref] = cb.checked; savePrefs(); render(); });
     });
+    root.querySelectorAll('.sec').forEach((b) => b.addEventListener('click', () => {
+      state.prefs[b.dataset.sec] = !state.prefs[b.dataset.sec];
+      savePrefs();
+      keepScroll(renderSections);
+      if (state.video) placeHost();
+    }));
     el.list.addEventListener('click', (ev) => {
       const row = ev.target.closest('.row');
       if (!row) return;
@@ -998,6 +1016,7 @@
       return;
     }
     el.title.textContent = `${state.game.away} at ${state.game.home} · Week ${state.game.week}`;
+    el.title.title = el.title.textContent;
     el.sub.textContent = `${syncedCount()} of ${state.plays.length} plays synced`;
     let q = null;
     const frag = document.createDocumentFragment();
@@ -1095,6 +1114,7 @@
   let pickerSeason = null;
 
   async function renderPicker() {
+    if (state.prefs.hidePlays) { state.prefs.hidePlays = false; savePrefs(); renderSections(); } // the picker lives in the list
     const box = document.createElement('div');
     box.className = 'picker';
     const intro = document.createElement('p');
@@ -1277,6 +1297,17 @@
     return `${h ? `${h}:` : ''}${String(m).padStart(h ? 2 : 1, '0')}:${String(sec).padStart(2, '0')}`;
   }
 
+  // The panel's two sections (controls, and search + play list) can each be hidden.
+  function renderSections() {
+    el.panel.classList.toggle('no-ctl', !!state.prefs.hideCtl);
+    el.panel.classList.toggle('no-plays', !!state.prefs.hidePlays);
+    root.querySelectorAll('.sec').forEach((b) => {
+      const shown = !state.prefs[b.dataset.sec];
+      b.setAttribute('aria-pressed', String(shown));
+      b.title = `${shown ? 'Hide' : 'Show'} the ${b.dataset.sec === 'hideCtl' ? 'controls' : 'search and play list'}`;
+    });
+  }
+
   function render() {
     if (!root) return;
     applyPositions();
@@ -1290,6 +1321,7 @@
     el.audio.classList.add('hidden');
     root.querySelectorAll('input[data-pref]').forEach((cb) => { cb.checked = !!state.prefs[cb.dataset.pref]; });
     el.panel.classList.toggle('hidden', !state.prefs.list);
+    renderSections();
     if (state.game) el.sub.textContent = `${syncedCount()} of ${state.plays.length} plays synced`;
     renderSyncPrompt();
     lastBugIndex = null;
