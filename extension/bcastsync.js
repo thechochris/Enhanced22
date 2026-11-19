@@ -90,7 +90,7 @@ var E22Bcast = (function () {
     return best;
   }
 
-  function refine(rel, cands, o) {
+  function refine(rel, cands, o, wts = null) {
     for (let it = 0; it < 2; it++) {
       const res = [];
       for (const r of rel) {
@@ -100,17 +100,27 @@ var E22Bcast = (function () {
       if (!res.length) break;
       o += quantile(res, 0.5);
     }
-    let matched = 0, last = -1;
+    // late: plays whose nearest snap comes a little after where this offset puts them. The
+    // replay only removes time, so within a stretch a snap can come early (a short cut) but
+    // not late; several of those mean the offset is probably wrong.
+    let matched = 0, weight = 0, last = -1, late = 0;
     rel.forEach((r, i) => {
       const c = nearest(cands, o + r);
-      if (c != null && Math.abs(c - (o + r)) <= TOL) { matched++; last = i; }
+      if (c == null) return;
+      const d = c - (o + r);
+      if (Math.abs(d) <= TOL) { matched++; weight += wts ? wts[i] : 1; last = i; }
+      else if (d > 1.5 && d < 6) late++;
     });
-    return { o, matched, last };
+    return { o, matched, weight, last, late };
   }
 
-  // Best offset (broadcast seconds of the segment's first snap) within [lo, hi].
-  function fitSegment(seg, cands, lo, hi) {
+  // Possible offsets (broadcast seconds of the segment's first snap) within [lo, hi], best
+  // first: up to `max` distinct ones, each refined, with how many plays line up there.
+  function fitsFor(seg, cands, lo, hi, max = 6) {
     const rel = seg.map((p) => (p.snapAt - seg[0].snapAt) / 1000);
+    // A kickoff's logged time is loose and its camera doesn't settle like a snap, so a
+    // kickoff lining up counts for half.
+    const wts = seg.map((p) => (p.type === 'kickoff' ? 0.5 : 1));
     const votes = [];
     for (const c of cands) {
       for (let i = 0; i < rel.length; i++) {
@@ -118,11 +128,10 @@ var E22Bcast = (function () {
         if (o >= lo && o <= hi) votes.push(o);
       }
     }
-    if (!votes.length) return null;
+    if (!votes.length) return [];
     votes.sort((x, y) => x - y);
     // Every 1.5 s window of votes is a possible offset. The busiest window can be a near miss
-    // (plays spaced alike can line up loosely at the wrong offset), so the few busiest distinct
-    // windows are each refined and the one where the most plays truly line up wins.
+    // (plays spaced alike can line up loosely at the wrong offset), so several are refined.
     const peaks = [];
     let j = 0;
     for (let i = 0; i < votes.length; i++) {
@@ -130,17 +139,18 @@ var E22Bcast = (function () {
       peaks.push({ n: i - j + 1, o: (votes[i] + votes[j]) / 2 });
     }
     peaks.sort((x, y) => y.n - x.n);
-    const tried = [];
-    let best = null;
+    const out = [];
     for (const pk of peaks) {
-      if (tried.length >= 6) break;
-      if (tried.some((o) => Math.abs(o - pk.o) < 2 * TOL)) continue;
-      tried.push(pk.o);
-      const r = refine(rel, cands, pk.o);
-      if (!best || r.matched > best.matched) best = r;
+      if (out.length >= max) break;
+      if (out.some((f) => Math.abs(f.o - pk.o) < 2 * TOL)) continue;
+      const r = refine(rel, cands, pk.o, wts);
+      if (out.some((f) => Math.abs(f.o - r.o) < 2 * TOL)) continue;
+      out.push({ ...r, plays: rel.length, span: rel[rel.length - 1] });
     }
-    const { o, matched, last } = best;
-    return { o, matched, last, plays: rel.length, span: rel[rel.length - 1] };
+    return out.sort((x, y) => y.weight - x.weight || x.late - y.late);
+  }
+  function fitSegment(seg, cands, lo, hi) {
+    return fitsFor(seg, cands, lo, hi)[0] || null;
   }
 
   // frames + plays -> anchors [{ w, b, auto }] (one per stretch between breaks) and a summary.
@@ -150,7 +160,6 @@ var E22Bcast = (function () {
     const end = duration || (frames.length ? frames[frames.length - 1].t : 0);
     const anchors = [];
     const detail = [];
-    let prev = null; // { endB, endW }: broadcast and wall time of the last play that lined up
     let found = 0;
     // A placed stretch can still hide a short cut (a review, an injury stop). Plays after the
     // last one that lined up get their own fit, in the window the cut allows; repeat.
@@ -174,44 +183,61 @@ var E22Bcast = (function () {
       }
       return at;
     };
-    for (const seg of segs) {
-      let lo = 0, hi = end;
-      if (prev) {
-        lo = prev.endB + 5;
-        // The replay only removes time, so the gap can't be longer than it was live.
-        hi = prev.endB + (seg[0].snapAt - prev.endW) / 1000 + 8;
+    // Place all stretches together. Each has a few possible offsets; a choice must keep the
+    // stretches in order, and since the replay only removes time, the broadcast gap after a
+    // stretch's last matched snap can't be longer than the real one. Among the choices that
+    // fit, the one where the most snaps line up wins. Chance matches rarely survive this,
+    // because a wrong offset for one stretch squeezes out its neighbors.
+    const rels = segs.map((seg) => seg.map((p) => (p.snapAt - seg[0].snapAt) / 1000));
+    const nodes = []; // { k, f, endB, endW, score }
+    segs.forEach((seg, k) => {
+      for (const f of fitsFor(seg, cands, 0, end, 150)) {
+        if (f.matched < 2) continue;
+        nodes.push({ k, f, endB: f.o + rels[k][f.last], endW: seg[f.last].snapAt, score: f.weight - 1.2 - 0.3 * f.late });
       }
-      const fit = fitSegment(seg, cands, lo, hi);
-      // At least 3 plays (and 40% of the stretch) must line up; short stretches are left to
-      // the break estimate rather than risk a chance match.
-      const ok = !!fit && seg.length >= 3 && fit.matched >= Math.max(3, Math.ceil(seg.length * 0.4));
-      detail.push({ first: seg[0].id, plays: seg.length, matched: fit ? fit.matched : 0, offset: fit ? +fit.o.toFixed(2) : null, ok });
-      if (ok) {
-        prev = place(seg, fit);
-        detail[detail.length - 1].endB = prev.endB;
+    });
+    nodes.sort((x, y) => x.k - y.k || x.f.o - y.f.o);
+    const best = nodes.map(() => ({ v: 0, from: -1 }));
+    for (let x = 0; x < nodes.length; x++) {
+      const nx = nodes[x];
+      let v = nx.score, from = -1;
+      if (nx.f.o < 0) { best[x] = { v: -Infinity, from: -1 }; continue; }
+      for (let y = 0; y < x; y++) {
+        const ny = nodes[y];
+        if (ny.k >= nx.k || best[y].v === -Infinity) continue;
+        if (nx.f.o < ny.endB + 3) continue;
+        if (nx.f.o > ny.endB + (segs[nx.k][0].snapAt - ny.endW) / 1000 + 8) continue;
+        if (best[y].v + nx.score > v) { v = best[y].v + nx.score; from = y; }
       }
-      // An unplaced stretch leaves prev alone, so the next search window spans it too.
+      best[x] = { v, from };
     }
-    // Second pass: a stretch left unplaced sits between two placed ones, which pins it into a
-    // narrow window (after the previous stretch, early enough for the next one to fit). Inside
-    // that window two matching snaps are enough.
-    const fits = segs.map((seg, k) => (detail[k].ok ? { o: detail[k].offset, endB: detail[k].endB } : null));
-    for (let k = 0; k < segs.length; k++) {
-      if (fits[k]) continue;
-      const seg = segs[k];
-      let p = k - 1; while (p >= 0 && !fits[p]) p--;
-      let q = k + 1; while (q < segs.length && !fits[q]) q++;
-      if (p < 0 || q >= segs.length) continue;
-      const span = (seg[seg.length - 1].snapAt - seg[0].snapAt) / 1000;
-      const lo = fits[p].endB + 5;
-      const hi = fits[q].o - span - 5;
-      if (hi < lo) continue;
-      const fit = fitSegment(seg, cands, lo, hi);
-      if (fit && fit.matched >= Math.min(2, seg.length) && fit.matched >= Math.ceil(seg.length * 0.3)) {
-        fits[k] = { o: fit.o, endB: place(seg, fit).endB };
-        Object.assign(detail[k], { matched: fit.matched, offset: +fit.o.toFixed(2), ok: true, narrow: true });
-      }
-    }
+    let top = -1;
+    for (let x = 0; x < nodes.length; x++) if (best[x].v > 0 && (top < 0 || best[x].v > best[top].v)) top = x;
+    const chosen = new Map();
+    for (let x = top; x >= 0; x = best[x].from) chosen.set(nodes[x].k, nodes[x]);
+    // A short stretch left out sits between two placed ones, which pins it into a narrow
+    // window; there one matching snap is enough.
+    const chosenK = [...chosen.keys()].sort((x, y) => x - y);
+    segs.forEach((seg, k) => {
+      if (chosen.has(k)) return;
+      const p = chosenK.filter((x) => x < k).pop();
+      const q = chosenK.find((x) => x > k);
+      if (p == null || q == null) return;
+      const P = chosen.get(p), Q = chosen.get(q);
+      const lo = P.endB + 3;
+      const hi = Math.min(P.endB + (seg[0].snapAt - P.endW) / 1000 + 8, Q.f.o - rels[k][rels[k].length - 1] - 3);
+      if (hi < lo) return;
+      // Accept the only offset in the window where a play lines up.
+      const fs = fitsFor(seg, cands, lo, hi, 20).filter((f) => f.weight >= 1 && f.late === 0);
+      if (fs.length === 1) chosen.set(k, { f: fs[0], narrow: true });
+    });
+    segs.forEach((seg, k) => {
+      const n = chosen.get(k);
+      const d = { first: seg[0].id, plays: seg.length, matched: n ? n.f.matched : 0, offset: n ? +n.f.o.toFixed(2) : null, ok: !!n };
+      if (n && n.narrow) d.narrow = true;
+      if (n) d.endB = place(seg, n.f).endB;
+      detail.push(d);
+    });
     anchors.sort((x, y) => x.w - y.w);
     return {
       anchors,
@@ -220,6 +246,6 @@ var E22Bcast = (function () {
     };
   }
 
-  return { findSnaps, segments, fitSegment, build, BREAK_GAP, SPLIT_GAP };
+  return { findSnaps, segments, fitSegment, fitsFor, build, BREAK_GAP, SPLIT_GAP };
 })();
 if (typeof module !== 'undefined') module.exports = E22Bcast;
