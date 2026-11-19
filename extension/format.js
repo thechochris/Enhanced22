@@ -129,21 +129,73 @@ var E22 = (function () {
   }
 
   const TEAM_COLORS = {
-    ARI: '#97233F', ATL: '#A71930', BAL: '#241773', BUF: '#00338D', CAR: '#0085CA', CHI: '#C83803',
-    CIN: '#FB4F14', CLE: '#FF3C00', DAL: '#003594', DEN: '#FB4F14', DET: '#0076B6', GB: '#203731',
+    ARI: '#97233F', ATL: '#A71930', BAL: '#241773', BUF: '#00338D', CAR: '#0085CA', CHI: '#0B162A',
+    CIN: '#000000', CLE: '#311D00', DAL: '#003594', DEN: '#002244', DET: '#0076B6', GB: '#203731',
     HOU: '#A71930', IND: '#002C5F', JAX: '#006778', KC: '#E31837', LA: '#003594', LAC: '#0080C6',
-    LV: '#A5ACAF', MIA: '#008E97', MIN: '#4F2683', NE: '#C60C30', NO: '#D3BC8D', NYG: '#0B2265',
-    NYJ: '#125740', PHI: '#004C54', PIT: '#FFB612', SEA: '#69BE28', SF: '#AA0000', TB: '#D50A0A',
-    TEN: '#4B92DB', WAS: '#5A1414',
+    LV: '#000000', MIA: '#008E97', MIN: '#4F2683', NE: '#C60C30', NO: '#101820', NYG: '#0B2265',
+    NYJ: '#125740', PHI: '#004C54', PIT: '#101820', SEA: '#002244', SF: '#AA0000', TB: '#D50A0A',
+    TEN: '#0C2340', WAS: '#5A1414',
+  };
+  // Second team colors, picked to show against the first: where a team's accent would vanish
+  // (dark on dark), it gets its next one, and teams whose main color is dark (Bears navy,
+  // Steelers black...) use it as the fill with their bright color as the accent.
+  const TEAM_COLORS2 = {
+    ARI: '#FFB612', ATL: '#A5ACAF', BAL: '#9E7C0C', BUF: '#C60C30', CAR: '#BFC0BF', CHI: '#C83803',
+    CIN: '#FB4F14', CLE: '#FF3C00', DAL: '#869397', DEN: '#FB4F14', DET: '#B0B7BC', GB: '#FFB612',
+    HOU: '#FFFFFF', IND: '#A2AAAD', JAX: '#D7A22A', KC: '#FFB81C', LA: '#FFA300', LAC: '#FFC20E',
+    LV: '#A5ACAF', MIA: '#FC4C02', MIN: '#FFC62F', NE: '#B0B7BC', NO: '#D3BC8D', NYG: '#A71930',
+    NYJ: '#FFFFFF', PHI: '#A5ACAF', PIT: '#FFB612', SEA: '#69BE28', SF: '#B3995D', TB: '#FF7900',
+    TEN: '#4B92DB', WAS: '#FFB612',
   };
   const teamColor = (t) => TEAM_COLORS[t] || '#5b667d';
-  // White text like the TD tag, unless the team color is too light for it.
-  function teamInk(t) {
-    const h = teamColor(t).slice(1);
+  const teamColor2 = (t) => TEAM_COLORS2[t] || '#9aa6bd';
+  // White text like the TD tag, unless the color is too light for it.
+  const lum = (hex) => {
+    const h = hex.slice(1);
     const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255)
       .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return [r, g, b];
+  };
+  function inkOn(hex) {
+    const [r, g, b] = lum(hex);
     const L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
     return 1.05 / (L + 0.05) >= 3 ? '#fff' : '#111';
+  }
+  const teamInk = (t) => inkOn(teamColor(t));
+  // How different two colors look (CIE Lab distance; under about 25 reads as "the same color").
+  function colorDistance(a, b) {
+    const lab = (hex) => {
+      const [r, g, bl] = lum(hex);
+      const f = (v) => (v > 0.008856 ? Math.cbrt(v) : 7.787 * v + 16 / 116);
+      const X = f((0.4124 * r + 0.3576 * g + 0.1805 * bl) / 0.95047);
+      const Y = f(0.2126 * r + 0.7152 * g + 0.0722 * bl);
+      const Z = f((0.0193 * r + 0.1192 * g + 0.9505 * bl) / 1.08883);
+      return [116 * Y - 16, 500 * (X - Y), 200 * (Y - Z)];
+    };
+    const [x, y] = [lab(a), lab(b)];
+    return Math.hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]);
+  }
+  const SAME = 25;
+  // Colors for both teams in one game: { [team]: { fill, accent, ink } }. When the two main
+  // colors look alike (Cowboys and Rams blue, say), the away team flips to its second color
+  // as the fill, with its main color as the accent; if that still clashes, it goes white.
+  function gameColors(game) {
+    const out = {};
+    if (!game) return out;
+    const pick = (t) => ({ fill: teamColor(t), accent: teamColor2(t) });
+    const home = pick(game.home);
+    let away = pick(game.away);
+    if (colorDistance(home.fill, away.fill) < SAME) {
+      away = { fill: away.accent, accent: away.fill, flipped: true };
+      if (colorDistance(home.fill, away.fill) < SAME || colorDistance('#151b27', away.fill) < 12) away = { fill: '#FFFFFF', accent: teamColor(game.away), flipped: true };
+    }
+    for (const [t, c] of [[game.home, home], [game.away, away]]) out[t] = { ...c, ink: inkOn(c.fill) };
+    return out;
+  }
+  // One team's colors, using the game's (flipped) colors when that team is playing in it.
+  function colorsFor(t, game) {
+    const g = gameColors(game);
+    return g[t] || { fill: teamColor(t), accent: teamColor2(t), ink: teamInk(t) };
   }
 
   const TEAM_NAMES = {
@@ -192,5 +244,5 @@ var E22 = (function () {
     return true;
   }
 
-  return { teamInk, matches, searchText, kick, typeLabel, quarter, clock, downDistance, yardLine, score, scores, teamColor, details };
+  return { teamColor2, teamInk, gameColors, colorsFor, colorDistance, matches, searchText, kick, typeLabel, quarter, clock, downDistance, yardLine, score, scores, teamColor, details };
 })();

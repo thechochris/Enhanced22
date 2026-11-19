@@ -541,7 +541,7 @@
     .bug .sb { display: flex; align-items: stretch; height: 52px; background: #0d1119; }
     .bug .team { display: flex; align-items: center; gap: 8px; padding: 0 10px 0 8px; min-width: 104px;
       position: relative; border-right: 1px solid rgba(255,255,255,.12); }
-    .bug .team::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--tc, #555); }
+    .bug .team::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 7px; background: linear-gradient(to right, var(--tc, #555) 0 4px, var(--tc2, #555) 4px 7px); }
     .bug .team .ab { font-size: 16px; font-weight: 800; letter-spacing: .5px; margin-left: 4px; }
     .bug .team .pts { font-size: 32px; font-weight: 800; margin-left: auto; line-height: 1; }
     .bug .team .ball { width: 7px; height: 7px; border-radius: 50%; background: #ffd34d; visibility: hidden; }
@@ -616,7 +616,8 @@
     .row .t { font-variant-numeric: tabular-nums; color: #cfd6e4; }
     .row .pos { font-weight: 700; }
     .tm { display: inline-block; min-width: 26px; text-align: center; border-radius: 3px; padding: 0 4px;
-      font-size: 11px; font-weight: 700; line-height: 16px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.18); }
+      font-size: 11px; font-weight: 700; line-height: 15px; border: 1px solid var(--tc2, transparent);
+      box-shadow: inset 0 -3px 0 var(--tc2, transparent); padding-bottom: 2px; }
     .row .ty .sit { color: #9aa6bd; }
     .row .det { grid-column: 3; color: #cfd6e4; font-size: 12px; margin-top: -2px; }
     .row.cur .det { color: #fff; }
@@ -839,7 +840,9 @@
       const g = state.game;
       const sc = E22.scores(p, g);
       for (const [node, team, pts] of [[el.away, g.away, sc.away], [el.home, g.home, sc.home]]) {
-        node.style.setProperty('--tc', E22.teamColor(team));
+        const tc = E22.colorsFor(team, g);
+        node.style.setProperty('--tc', tc.fill);
+        node.style.setProperty('--tc2', tc.accent);
         node.querySelector('.ab').textContent = team;
         node.querySelector('.pts').textContent = pts ?? '';
         node.classList.toggle('has', p.pos === team);
@@ -908,8 +911,10 @@
         const tb = document.createElement('span');
         tb.className = 'tm';
         tb.textContent = p.pos;
-        tb.style.background = E22.teamColor(p.pos);
-        tb.style.color = E22.teamInk(p.pos);
+        const tc = E22.colorsFor(p.pos, state.game);
+        tb.style.background = tc.fill;
+        tb.style.color = tc.ink;
+        tb.style.setProperty('--tc2', tc.accent);
         pos.appendChild(tb);
       }
       const ty = document.createElement('span'); ty.className = 'ty';
