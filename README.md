@@ -55,7 +55,7 @@ If the broadcast replay has cuts (commercial breaks removed), add another **B** 
 ## Known limits
 
 - Not yet tested on the live NFL+ site. If NFL+ plays video inside a frame on a non-nfl.com domain, the page match in `manifest.json` needs that domain added.
-- The overlay can't draw over a video that is itself fullscreen, only over a fullscreen player container (which is how most players work).
+- Full screen: the panel, scorebug and toasts stay on screen. When a player puts the bare video in full screen (which would leave no room for anything on top), a small script in the page sends that request to the video's container instead, so it looks the same with the overlay on top.
 
 ## Play details
 

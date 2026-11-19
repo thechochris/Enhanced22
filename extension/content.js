@@ -801,8 +801,13 @@
   function placeHost() {
     const v = state.video;
     if (!v || !host) return;
-    const fs = document.fullscreenElement;
-    const parent = fs && fs !== v && fs.contains(v) ? fs : document.documentElement;
+    // In full screen the browser shows only the full-screen element, so the overlay must live
+    // inside it. Players usually put a container in full screen (the page-side helper turns a
+    // bare-video request into that); anything else full screen still gets the overlay, since
+    // drawing it outside would hide it.
+    let fs = document.fullscreenElement;
+    while (fs && fs.shadowRoot && fs.shadowRoot.fullscreenElement) fs = fs.shadowRoot.fullscreenElement;
+    const parent = fs && fs !== v && !(fs instanceof HTMLVideoElement) && !(fs instanceof HTMLIFrameElement) ? fs : document.documentElement;
     if (host.parentNode !== parent) parent.appendChild(host);
     const r = v.getBoundingClientRect();
     Object.assign(host.style, {
@@ -1645,4 +1650,5 @@
     placeHost(); tick();
   }, 100));
   document.addEventListener('fullscreenchange', placeHost);
+  document.addEventListener('webkitfullscreenchange', placeHost);
 })();
