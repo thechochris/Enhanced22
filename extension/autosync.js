@@ -283,9 +283,41 @@ var E22Auto = (function () {
   const PRE_SNAP_DESC = /^\([^)]*\)\s*(\([^)]*\)\s*)*PENALTY/i;
   const isPreSnap = (p) => p.type === 'no_play' && PRE_SNAP_DESC.test(p.desc || '');
 
-  // Seconds from the start of the sideline view to the snap: 0.35-0.45 s on clean scans
-  // checked against snaps placed by hand.
-  const SNAP_LEAD = 0.4;
+  // Seconds from the start of the sideline view to the snap when it can't be seen in the film.
+  // The view opens on the teams lining up; on a full game the snap came a median 4.5 s in.
+  const SNAP_LEAD = 4.5;
+  const SNAP_VERSION = 2; // bump when snap placement changes, so saved marks get redone
+
+  // The snap inside a sideline clip: the picture is nearly still while the teams are set,
+  // then everything starts moving and keeps moving. Returns seconds after the clip start.
+  function findSnapIn(frames, c) {
+    const B = 0.25;
+    const bins = [];
+    let k = 0;
+    while (k < frames.length && frames[k].t < c.s) k++;
+    for (let t = c.s; t < c.e; t += B) {
+      let sum = 0, n = 0;
+      while (k < frames.length && frames[k].t < t + B) { sum += frames[k].diff; n++; k++; }
+      bins.push(n ? sum / n : null);
+    }
+    const ok = (xs) => xs.filter((x) => x != null);
+    const avg = (xs) => { const v = ok(xs); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+    for (let i = 4; i < Math.min(bins.length - 6, 40); i++) {
+      const pre = ok(bins.slice(Math.max(1, i - 6), i));
+      if (pre.length < 3) continue;
+      const base = median(pre);
+      const post = avg(bins.slice(i, i + 4));
+      const longer = avg(bins.slice(i, i + 8));
+      if (post == null || longer == null) continue;
+      if (base <= 0.0008 && post >= Math.max(2 * base, base + 0.0004) && longer >= 1.6 * base) {
+        const lead = i * B;
+        // Outside the usual range it's more likely pre-snap motion or a replay than the snap.
+        return lead >= 2.5 && lead <= 7 ? lead : null;
+      }
+    }
+    return null;
+  }
+  const snapFor = (frames, c, end) => Math.min(c.s + (findSnapIn(frames, c) ?? SNAP_LEAD), c.s + (end - c.s) * 0.7);
   // Median frame difference over a clip's first second above which it opened mid-motion.
   // Real sideline views mostly measure 0.0001-0.0012, flips inside replays 0.0007-0.0038;
   // short clips (under 4 s) use half the threshold.
@@ -405,10 +437,9 @@ var E22Auto = (function () {
       const c = matches.has(j) ? clips[matches.get(j)] : null;
       if (!c) { marks[p.id] = { skip: true, auto: true }; return; }
       const c2 = extended.has(j) ? clips[extended.get(j)] : null;
-      if (c2) { marks[p.id] = { s: c.s, e: c2.e, snap: Math.min(c.s + SNAP_LEAD, c.e), auto: true }; return; }
-      // The sideline view opens a moment before the snap.
-      const snap = Math.min(c.s + SNAP_LEAD, c.e);
-      marks[p.id] = { s: c.s, e: c.e, snap, auto: true };
+      if (c2) { marks[p.id] = { s: c.s, e: c2.e, snap: snapFor(frames, c, c2.e), sv: SNAP_VERSION, auto: true }; return; }
+      // The sideline view opens a few seconds before the snap, on the teams lining up.
+      marks[p.id] = { s: c.s, e: c.e, snap: snapFor(frames, c, c.e), sv: SNAP_VERSION, auto: true };
     });
     const alternating = shots.slice(1).filter((x, k) => x.label !== shots[k].label).length / Math.max(1, shots.length - 1);
     return {
@@ -421,6 +452,6 @@ var E22Auto = (function () {
     };
   }
 
-  return { W, H, features, gridDiff, scan, segmentByAngle, findShots, labelShots, clipsFrom, align, build, SNAP_LEAD };
+  return { W, H, features, gridDiff, scan, segmentByAngle, findShots, labelShots, clipsFrom, align, build, findSnapIn, SNAP_LEAD, SNAP_VERSION };
 })();
 if (typeof module !== 'undefined') module.exports = E22Auto;

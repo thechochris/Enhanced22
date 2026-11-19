@@ -73,6 +73,10 @@
     state.history = saved.history || [];
     state.anchors = saved.anchors || [];
     state.audioOffset = saved.audioOffset || 0;
+    // Re-match plays saved by an older version from the saved scan, to pick up the found snaps.
+    if (Object.values(state.marks).some((m) => m.auto && typeof m.s === 'number' && m.sv !== E22Auto.SNAP_VERSION)) {
+      realignFromScan();
+    }
     renderList();
     renderAutoButton();
     render();
@@ -239,9 +243,11 @@
     if (!p || !p.snapAt) return null;
     const m = markOf(i);
     const seg = segment(i);
-    // Hand-placed plays start at the snap; auto-synced ones carry an estimated snap.
-    // (Automatic ones are recomputed, so marks saved by older versions get the current lead.)
-    const snapT = m && m.auto && typeof m.s === 'number' ? Math.min(m.s + E22Auto.SNAP_LEAD, m.e ?? Infinity)
+    // Auto-synced plays carry the snap found in the film; marks from older versions get the
+    // typical lead until they are re-matched. Hand-placed plays start at the snap.
+    const snapT = m && m.auto && typeof m.s === 'number'
+      ? (m.sv === E22Auto.SNAP_VERSION && typeof m.snap === 'number' ? m.snap
+        : Math.min(m.s + E22Auto.SNAP_LEAD, m.s + ((m.e ?? m.s + 10) - m.s) * 0.7))
       : m && typeof m.snap === 'number' ? m.snap : seg ? seg.s : t;
     return p.snapAt + (t - snapT) * 1000 + state.audioOffset * 1000;
   }
@@ -290,7 +296,8 @@
     let waitNext = false;
     if (w != null) {
       const next = state.plays.slice(i + 1).find((p) => p.snapAt);
-      if (next && w > next.snapAt - 1500) { w = next.snapAt - 1500; waitNext = true; }
+      const stop = next ? next.snapAt - E22Auto.SNAP_LEAD * 1000 : Infinity; // where the next play's film usually begins
+      if (next && w > stop) { w = stop; waitNext = true; }
     }
     const holding = hold.index != null;
     const playing = !!w && !holding && !waitNext && !v.paused && !v.seeking && v.readyState >= 2;
