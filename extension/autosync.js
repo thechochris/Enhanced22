@@ -344,11 +344,14 @@ var E22Auto = (function () {
     const fixedAt = Object.entries(fixed).map(([j, t]) => [Number(j), t]);
     for (const [j] of fixedAt) if (j < skipPlay.length) skipPlay[j] = 10;
     const NEAR_FIX = 4;
+    // A pin "hits" a clip when it falls inside it (you may have clicked at the snap, a few
+    // seconds into the view) or within a few seconds of its start.
+    const hits = (c, t) => Math.abs(c.s - t) < NEAR_FIX || (t >= c.s && t < c.e);
     // dur: the film length to compare with the play (a kick spread over several clips passes
     // the whole span, from its first sideline clip to the end of its last).
     const matchCost = (i, j, dur = clips[i].dur) => {
-      if (j in fixed) return Math.abs(clips[i].s - fixed[j]) < NEAR_FIX ? -10 : 10;
-      if (fixedAt.some(([, t]) => Math.abs(clips[i].s - t) < NEAR_FIX)) return 10;
+      if (j in fixed) return hits(clips[i], fixed[j]) ? -10 : 10;
+      if (fixedAt.some(([, t]) => hits(clips[i], t))) return 10;
       const d = durs[j];
       const base = d == null ? 0.4 : Math.min(1.2, Math.abs(dur - (d + pad)) / 8);
       const pre = isPreSnap(plays[j]) ? 0.8 : 0;
@@ -369,7 +372,7 @@ var E22Auto = (function () {
         // (say, the field goal before it) just to absorb clips.
         const tail = (x) => (clips[x].dur < 8 ? -0.2 : 0.4);
         const span = (a, b) => clips[b].e - clips[a].s;
-        const pinned = (x) => fixedAt.some(([jj, t]) => jj !== j - 1 && Math.abs(clips[x].s - t) < NEAR_FIX);
+        const pinned = (x) => fixedAt.some(([jj, t]) => jj !== j - 1 && hits(clips[x], t));
         const k = isKick[j - 1] && i >= 2 && !pinned(i - 1)
           ? D[i - 2][j - 1] + matchCost(i - 2, j - 1, span(i - 2, i - 1)) + tail(i - 1) : Infinity;
         const k3 = isKick[j - 1] && i >= 3 && clips[i - 1].dur < 4 && !pinned(i - 1) && !pinned(i - 2)
