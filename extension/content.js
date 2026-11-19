@@ -615,6 +615,8 @@
     .row.skip { opacity: .3; text-decoration: line-through; cursor: default; }
     .row .t { font-variant-numeric: tabular-nums; color: #cfd6e4; }
     .row .pos { font-weight: 700; }
+    .tm { display: inline-block; min-width: 26px; text-align: center; border-radius: 3px; padding: 0 4px;
+      font-size: 11px; font-weight: 700; line-height: 16px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.18); }
     .row .ty .sit { color: #9aa6bd; }
     .row .det { grid-column: 3; color: #cfd6e4; font-size: 12px; margin-top: -2px; }
     .row.cur .det { color: #fff; }
@@ -901,7 +903,15 @@
       row.dataset.i = i;
       row.title = m?.skip ? 'Not in the replay' : typeof m?.s === 'number' ? 'Click to jump to this play' : 'Not synced yet: press S at its snap to make it clickable';
       const t = document.createElement('span'); t.className = 't'; t.textContent = `${E22.quarter(p.qtr)} ${E22.clock(p.time)}`;
-      const pos = document.createElement('span'); pos.className = 'pos'; pos.textContent = p.pos || '';
+      const pos = document.createElement('span'); pos.className = 'pos';
+      if (p.pos) {
+        const tb = document.createElement('span');
+        tb.className = 'tm';
+        tb.textContent = p.pos;
+        tb.style.background = E22.teamColor(p.pos);
+        tb.style.color = E22.teamInk(p.pos);
+        pos.appendChild(tb);
+      }
       const ty = document.createElement('span'); ty.className = 'ty';
       ty.textContent = E22.typeLabel(p);
       const sit = document.createElement('span'); sit.className = 'sit';

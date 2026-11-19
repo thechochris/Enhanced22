@@ -137,6 +137,14 @@ var E22 = (function () {
     TEN: '#4B92DB', WAS: '#5A1414',
   };
   const teamColor = (t) => TEAM_COLORS[t] || '#5b667d';
+  // White text like the TD tag, unless the team color is too light for it.
+  function teamInk(t) {
+    const h = teamColor(t).slice(1);
+    const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255)
+      .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    const L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    return 1.05 / (L + 0.05) >= 3 ? '#fff' : '#111';
+  }
 
   const TEAM_NAMES = {
     ARI: 'cardinals arizona', ATL: 'falcons atlanta', BAL: 'ravens baltimore', BUF: 'bills buffalo',
@@ -184,5 +192,5 @@ var E22 = (function () {
     return true;
   }
 
-  return { matches, searchText, kick, typeLabel, quarter, clock, downDistance, yardLine, score, scores, teamColor, details };
+  return { teamInk, matches, searchText, kick, typeLabel, quarter, clock, downDistance, yardLine, score, scores, teamColor, details };
 })();
