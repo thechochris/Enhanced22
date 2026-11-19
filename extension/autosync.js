@@ -286,7 +286,7 @@ var E22Auto = (function () {
   // Seconds from the start of the sideline view to the snap when it can't be seen in the film.
   // The view opens on the teams lining up; on a full game the snap came a median 4.5 s in.
   const SNAP_LEAD = 4.5;
-  const SNAP_VERSION = 2; // bump when snap placement changes, so saved marks get redone
+  const SNAP_VERSION = 3; // bump when matching or snap placement changes, so saved marks get redone
 
   // The snap inside a sideline clip: the picture is nearly still while the teams are set,
   // then everything starts moving and keeps moving. Returns seconds after the clip start.
