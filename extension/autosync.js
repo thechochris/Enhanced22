@@ -268,6 +268,8 @@ var E22Auto = (function () {
         if (h > thr + margin) cur = 'E';
         else if (h < thr - margin) cur = 'S';
         // In between (a wider sideline shot, say on a punt): the views alternate.
+        // The first shot has nothing to alternate from: take the nearer side.
+        else if (shot === shots[0]) cur = h < thr ? 'S' : 'E';
         else if (frames[j - 1].t - t0 >= 6) cur = cur === 'E' ? 'S' : 'E';
       }
       const last = runs[runs.length - 1];
@@ -349,7 +351,7 @@ var E22Auto = (function () {
   // Seconds from the start of the sideline view to the snap when it can't be seen in the film.
   // The view opens on the teams lining up; on a full game the snap came a median 4.5 s in.
   const SNAP_LEAD = 4.5;
-  const SNAP_VERSION = 6; // bump when matching or snap placement changes, so saved marks get redone
+  const SNAP_VERSION = 7; // bump when matching or snap placement changes, so saved marks get redone
 
   // The sideline view ends a few seconds after the whistle: on a full game the time from the
   // end of the play to the end of the view was 3-4.5 s (median 3.7), while the time from the
