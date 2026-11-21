@@ -633,8 +633,11 @@
     .row .ty .sit { color: #9aa6bd; }
     .row .det { grid-column: 3; color: #cfd6e4; font-size: 12px; margin-top: -2px; }
     .row.cur .det { color: #fff; }
-    .td { white-space: nowrap; background: #e5484d; color: #fff; border-radius: 3px; padding: 0 5px; font-size: 11px; font-weight: 700; margin-left: 6px; }
-    .row.tdrow { box-shadow: inset 3px 0 0 #e5484d; }
+    .td, .to { white-space: nowrap; background: #f2b705; color: #111; border-radius: 3px; padding: 0 5px; font-size: 11px; font-weight: 700; margin-left: 6px; }
+    .to { background: #e5484d; color: #fff; }
+    .row.tdrow { box-shadow: inset 3px 0 0 #f2b705; }
+    .row.torow { box-shadow: inset 3px 0 0 #e5484d; }
+    .row.tdrow.torow { box-shadow: inset 3px 0 0 #e5484d, inset 6px 0 0 #f2b705; }
 
     .searchbar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,.08); }
     .search { flex: 1; min-width: 0; font: inherit; font-size: 12px; color: #fff; background: #10151f;
@@ -982,6 +985,13 @@
         td.textContent = p.tdTeam ? `TD ${p.tdTeam}` : 'TD';
         el.l3.appendChild(td);
       }
+      const lost = E22.turnover(p);
+      if (lost) {
+        const to = document.createElement('span');
+        to.className = 'to';
+        to.textContent = p.def ? `${lost} ${p.def}` : lost;
+        el.l3.appendChild(to);
+      }
       highlightRow(i);
     }
     if (i !== lastBugIndex) { lastBugIndex = i; if (!show) highlightRow(i); }
@@ -1057,6 +1067,15 @@
         td.textContent = p.tdTeam && p.tdTeam !== p.pos ? `TD ${p.tdTeam}` : 'TD';
         ty.appendChild(td);
         row.classList.add('tdrow');
+      }
+      const lost = E22.turnover(p);
+      if (lost) {
+        const to = document.createElement('span');
+        to.className = 'to';
+        to.textContent = lost;
+        to.title = p.def ? `Turnover: ${p.def} takes the ball` : 'Turnover';
+        ty.appendChild(to);
+        row.classList.add('torow');
       }
       const k = E22.kick(p);
       if (k && k.outcome) {

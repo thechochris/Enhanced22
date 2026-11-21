@@ -114,8 +114,7 @@ var E22 = (function () {
     if (counted && p.yards != null && !p.inc && !p.int && (p.type === 'pass' || p.type === 'run' || p.type === 'qb_kneel')) {
       parts.push(yds(p.yards));
     }
-    if (p.int) parts.push('INT');
-    if (p.fumLost) parts.push('Fumble lost');
+    // Interceptions and lost fumbles show as their own red tag (turnover).
     const pen = penaltyText(p);
     if (pen) parts.push(pen);
     return parts.join(' · ');
@@ -209,12 +208,18 @@ var E22 = (function () {
     SF: '49ers niners san francisco', TB: 'buccaneers bucs tampa bay', TEN: 'titans tennessee',
     WAS: 'commanders washington',
   };
+  // A takeaway on the play: 'INT' or 'FUMBLE' (the ball changed hands), else null.
+  function turnover(p) {
+    if (p.int) return 'INT';
+    if (p.fumLost) return 'FUMBLE';
+    return null;
+  }
   // Words that describe a play, for the search box.
   function searchText(p) {
     const k = kick(p);
     const words = [
       typeLabel(p), p.desc, details(p), quarter(p.qtr), clock(p.time),
-      p.td && 'touchdown td', p.int && 'interception int pick', p.fumLost && 'fumble',
+      p.td && 'touchdown td', p.int && 'interception int pick', p.fumLost && 'fumble fumble lost', turnover(p) && 'turnover takeaway giveaway',
       p.sack && 'sack', p.pen && 'penalty flag', p.inc && 'incomplete',
       p.type === 'field_goal' && 'field goal fg', p.type === 'extra_point' && 'extra point pat xp',
       k && (k.good ? 'good made' : k.blocked ? 'blocked' : 'no good missed miss'),
@@ -244,5 +249,5 @@ var E22 = (function () {
     return true;
   }
 
-  return { teamColor2, teamInk, gameColors, colorsFor, colorDistance, matches, searchText, kick, typeLabel, quarter, clock, downDistance, yardLine, score, scores, teamColor, details };
+  return { turnover, teamColor2, teamInk, gameColors, colorsFor, colorDistance, matches, searchText, kick, typeLabel, quarter, clock, downDistance, yardLine, score, scores, teamColor, details };
 })();
