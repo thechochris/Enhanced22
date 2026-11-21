@@ -691,6 +691,9 @@
               <button data-act="reset" title="Clear every synced play for this game">Reset sync</button>
  <button data-act="export" title="Save the auto-sync scan to a file you can send to the developer">Export sync data</button>
               <button data-act="diag" title="Copy technical details about this player to send to the developer">Copy diagnostics</button>
+              <button data-act="savesync" title="Save this game's finished sync (play times and broadcast audio timing, no video) to share with others">Save sync file</button>
+              <button data-act="loadsync" title="Use a sync file someone else made for this game instead of syncing yourself">Load sync file</button>
+              <input class="syncfile" type="file" accept=".json,application/json" hidden>
             </div>
             <div class="status"></div></div></header>
           <div class="searchbar"><input class="search" type="search" placeholder="Search plays: player, team, touchdown, field goal…" aria-label="Search plays"><span class="scount"></span></div>
@@ -770,6 +773,7 @@
     let resetArmed = 0;
     const ACTIONS = {
       mark: markNext, skip: skipNext, undo, prev: () => jump(-1), next: () => jump(1),
+      savesync: saveSyncFile, loadsync: loadSyncFile,
       reset: () => {
         if (Date.now() - resetArmed > 4000) { resetArmed = Date.now(); return toast('Click Reset sync again to clear every synced play for this game'); }
         resetArmed = 0;
@@ -1461,6 +1465,81 @@
     state.lastAutoDetail = detail;
     saveMarks();
     return true;
+  }
+
+  // ---------- sharing a finished sync ----------
+  // A sync file holds only times: where each play sits in the All-22 replay and how the
+  // broadcast lines up. No video, audio or pictures. Everyone gets the same replay files, so a
+  // game synced once can be used by anyone.
+  const SYNC_FILE = 'enhanced22-shared-sync';
+  function saveSyncFile() {
+    if (!state.game) return toast('Pick the game first');
+    const marks = Object.fromEntries(Object.entries(state.marks).filter(([, m]) => m && (m.skip || typeof m.s === 'number'))
+      .map(([id, m]) => [id, m.skip ? { skip: true } : { s: m.s, e: m.e, ...(typeof m.snap === 'number' ? { snap: m.snap } : {}) }]));
+    if (!Object.keys(marks).length) return toast('Nothing to save yet: sync the game first (Auto-sync game).');
+    const data = {
+      kind: SYNC_FILE, format: 1, version: chrome.runtime.getManifest().version, game: state.game.gameId,
+      a22Duration: state.isAudioTab ? null : state.video?.duration ?? null,
+      plays: Object.values(marks).filter((m) => !m.skip).length,
+      marks,
+      anchors: state.anchors.map((a) => ({ w: a.w, b: a.b, ...(a.auto ? { auto: true } : {}) })),
+      audioOffset: state.audioOffset || 0,
+    };
+    downloadJson(data, `enhanced22-presync-${state.game.gameId}.json`);
+    toast(`Saved a sync file with ${data.plays} plays${data.anchors.length ? ' and broadcast audio timing' : ''} to your Downloads folder`);
+  }
+  // Use a shared sync: it replaces this game's automatic sync; plays you placed by hand stay.
+  function applySharedSync(data, from) {
+    if (!state.game) { toast('Pick the game first'); return false; }
+    if (data?.kind !== SYNC_FILE || !data.marks) { toast('That file is not an Enhanced22 sync file'); return false; }
+    if (data.game !== state.game.gameId) { toast(`That sync is for ${data.game}, not this game (${state.game.gameId})`); return false; }
+    const ids = new Set(state.plays.map((p) => p.id));
+    const marks = {};
+    for (const [id, m] of Object.entries(data.marks)) {
+      if (!ids.has(id) || !m) continue;
+      if (m.skip) marks[id] = { skip: true, auto: true, shared: true };
+      else if (typeof m.s === 'number' && typeof m.e === 'number') {
+        marks[id] = { s: m.s, e: m.e, ...(typeof m.snap === 'number' ? { snap: m.snap } : {}), sv: E22Auto.SNAP_VERSION, auto: true, shared: true };
+      }
+    }
+    const manual = Object.fromEntries(Object.entries(state.marks).filter(([, m]) => !m.auto));
+    state.marks = { ...marks, ...manual };
+    if (Array.isArray(data.anchors) && data.anchors.length) {
+      state.anchors = data.anchors.filter((a) => Number.isFinite(a.w) && Number.isFinite(a.b)).map((a) => ({ w: a.w, b: a.b, ...(a.auto ? { auto: true } : {}), shared: true }));
+      state.audioOffset = Number(data.audioOffset) || 0;
+    }
+    saveMarks();
+    renderList();
+    render();
+    const n = Object.values(marks).filter((m) => !m.skip).length;
+    const v = state.isAudioTab ? null : state.video?.duration;
+    const off = data.a22Duration && Number.isFinite(v) && Math.abs(v - data.a22Duration) > 5;
+    toast(off ? `Loaded ${n} plays ${from}, but this replay is a different length than the one it was made on, so times may be off`
+      : `Loaded ${n} plays${data.anchors?.length ? ' and broadcast audio timing' : ''} ${from}`);
+    return true;
+  }
+  function loadSyncFile() {
+    if (!state.game) return toast('Pick the game first');
+    const input = root.querySelector('.syncfile');
+    input.value = '';
+    input.onchange = async () => {
+      const f = input.files?.[0];
+      if (!f) return;
+      let data = null;
+      try { data = JSON.parse(await f.text()); } catch { return toast('That file could not be read'); }
+      applySharedSync(data, 'from the file');
+    };
+    input.click();
+  }
+  function downloadJson(data, name) {
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   }
 
   async function exportSyncData() {

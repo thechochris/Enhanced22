@@ -63,6 +63,8 @@ Each play in the list and in the on-video scorebug shows who had the ball (passe
 
 The **Controls** and **Plays** buttons in the panel's title bar hide or show its two parts: the controls (sync, auto-sync, toggles) and the search box with the play list. Hide either or both; the panel shrinks to fit and remembers your choice.
 
+**Sharing a sync.** Once a game is synced, **Save sync file** saves just the timing (where each play sits in the All-22 replay, and how the broadcast audio lines up; no video, audio or pictures) to a small file. Anyone else can open the same game and click **Load sync file** to use it instead of running Auto-sync and the broadcast scan themselves. Loading replaces the game's automatic sync and keeps any plays you placed by hand; to go back to syncing yourself, click **Reset sync** or just run **Auto-sync game**, which replaces it.
+
 The search box above the play list filters it as you type. Every word must match: a player (Purdy, Lamb), a team (SF, 49ers, Cowboys, meaning plays where that team had the ball), or a kind of play (touchdown, turnover, field goal, sack, interception, penalty, punt, missed). For example, *49ers touchdown* or *Aubrey field goal*. Esc clears it.
 
 ## Finding the plays in the broadcast automatically
