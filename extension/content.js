@@ -591,7 +591,9 @@
     .panel.no-plays .searchbar, .panel.no-plays .list, .panel.no-plays .resize { display: none; }
     .panel.no-plays { height: auto !important; bottom: auto !important; }
     .panel.no-plays header { border-bottom: 0; }
-    .bug { pointer-events: auto; cursor: move; user-select: none; }
+    .bug { pointer-events: auto; cursor: move; user-select: none; transform-origin: 0 0; }
+    .bug .bresize { opacity: 0; transition: opacity .15s; }
+    .bug:hover .bresize, .bug .bresize:active { opacity: 1; }
     .picker { padding: 10px; font-size: 12px; }
     .picker p { margin: 0 0 8px; color: #cfd6e4; line-height: 1.4; }
     .picker select { font: inherit; margin-left: 6px; }
@@ -665,6 +667,7 @@
             <div class="gs"><span class="clock"></span><span class="sit"><span class="dd"></span><span class="yl"></span></span></div>
           </div>
           <div class="strip"><span class="badge"></span><span class="l3"></span></div>
+          <div class="resize bresize" title="Drag to resize · double-click to reset"></div>
         </div>
         <div class="sync hidden"></div>
         <div class="audio hidden"><span class="atext"></span><button class="bscan">Find plays in this broadcast</button><button class="bexport">Export broadcast scan</button><button class="breset">Reset audio sync</button><button class="astop">Stop using this tab for audio</button></div>
@@ -722,6 +725,7 @@
     root.querySelector('header .change').addEventListener('click', () => { state.picking = true; renderList(); });
     makeDraggable(el.panel, root.querySelector('.panel header'), 'panelPos');
     watchPanelSize();
+    watchBugSize();
     makeDraggable(el.bug, el.bug, 'bugPos');
     el.controls = root.querySelector('header .controls');
     el.autosync = root.querySelector('header .autosync');
@@ -1244,14 +1248,51 @@
         node.style.left = node.style.top = node.style.right = node.style.bottom = '';
       }
     }
+    const bs = state.prefs.bugScale;
+    el.bug.style.scale = bs && bs !== 1 ? String(bs) : '';
     const size = state.prefs.panelSize;
     el.panel.style.width = size ? `${size.w}px` : '';
     el.panel.style.height = size ? `${size.h}px` : state.prefs.panelPos ? '75%' : '';
   }
 
   // Resize the panel by dragging its bottom-right grip (double-click the grip to reset).
+  // Resize the scorebug by dragging its bottom-right grip: it scales as a whole, so the text
+  // and team boxes keep their proportions (double-click the grip to reset).
+  function watchBugSize() {
+    const grip = el.bug.querySelector('.bresize');
+    grip.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      grip.setPointerCapture(ev.pointerId);
+      const r = el.bug.getBoundingClientRect();
+      const s0 = state.prefs.bugScale || 1;
+      const move = (e) => {
+        const byW = (r.width + e.clientX - ev.clientX) / r.width;
+        const byH = (r.height + e.clientY - ev.clientY) / r.height;
+        const k = Math.max(byW, byH);
+        state.prefs.bugScale = Math.round(Math.min(Math.max(s0 * k, 0.5), 3) * 100) / 100;
+        applyPositions();
+      };
+      const up = () => {
+        grip.removeEventListener('pointermove', move);
+        grip.removeEventListener('pointerup', up);
+        savePrefs();
+        keepOnScreen(el.bug);
+      };
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
+    });
+    grip.addEventListener('dblclick', (ev) => {
+      ev.stopPropagation();
+      delete state.prefs.bugScale;
+      savePrefs();
+      applyPositions();
+    });
+  }
+
   function watchPanelSize() {
-    const grip = root.querySelector('.resize');
+    const grip = root.querySelector('.panel .resize');
     grip.addEventListener('pointerdown', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();

@@ -26,7 +26,7 @@ The extension only reads the player's position and seeks it, like you would with
 
 The end of the sideline view is estimated as the midpoint between two snaps, since both angles show the same play. If one is off, press **E** at the moment the sideline view ends. Shift-click a play in the list to move its start to the current time.
 
-Drag the panel by its title bar anywhere in the browser window, and resize it from the grip in its bottom-right corner and the score banner anywhere on the video. Double-click either one to put it back.
+Drag the panel by its title bar anywhere in the browser window, and the score banner anywhere on the video. Resize either one from the grip in its bottom-right corner (the score banner's grip shows when you hover over it, and the banner scales as a whole). Double-click a grip to put that size back.
 
 ## Broadcast audio
 
